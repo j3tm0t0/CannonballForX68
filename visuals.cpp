@@ -908,6 +908,9 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
 #endif
  // r026c: the buffer is cleared by the tile pass (each non-empty 16-pixel run is zeroed after use)
  int low=224,high=0;
+ // tiles that a captured sprite may have drawn into (bit tx of row ty); the tile pass
+ // visits only these (a tile no sprite reached has no pixels: same result, no reads)
+ uint32_t tile_live[14]={0};
 #ifndef OR_X68K
  scenery_entry_count=0;
 #endif
@@ -924,7 +927,9 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   // out (no darkening on the X68000).
   if(!reuse){uint16_t table[16];const unsigned base=COLOR_BASE_SCENERY+((r[5]&127)<<4);const bool shadow=(r[3]&0x4000)!=0;
    for(unsigned k=0;k<16;k++){if(k==0||k==15||(shadow&&k==10)){table[k]=0;continue;}unsigned q=scenery_map[base|k];table[k]=uint16_t(q==255?0:q?q:(base|k));}
-   video.sprite_layer->capture_entry_table(r,scenery_pixels,table);}
+   int xb[2]={320,-1};video.sprite_layer->capture_entry_table(r,scenery_pixels,table,xb);
+   const int x0=std::max(0,xb[0]),x1=std::min(319,xb[1]),y0=std::max(0,std::min(top,bottom)),y1=std::min(223,std::max(top,bottom));
+   if(x0<=x1&&y0<=y1){const uint32_t cols=((2u<<(x1>>4))-1)&~((1u<<(x0>>4))-1);for(int ty=y0>>4;ty<=y1>>4;ty++)tile_live[ty]|=cols;}}
 #ifndef OR_X68K
   video.sprite_layer->capture_entry(r,scenery_std);
 #endif
@@ -984,7 +989,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  if(!block_bit_init){for(unsigned q=0;q<256;q++)block_bit[q]=uint16_t(q>=16?1u<<((q>>4)-1):0);block_bit_init=true;}
  if(!reuse)for(int ty=low/16;ty<(high+15)/16;ty++){
   const unsigned rows=unsigned(std::min(16,224-ty*16));
-  for(unsigned tx=0;tx<20;tx++){
+  for(uint32_t live=tile_live[ty];live;live&=live-1){const unsigned tx=unsigned(__builtin_ctz(live));
   uint32_t rowL[16],rowR[16];unsigned mask=0,rowbits=0;
   uint16_t*const tile_src=scenery_pixels+ty*16*320+tx*16;
   for(unsigned yy=0;yy<rows;yy++){
