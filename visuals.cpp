@@ -1062,6 +1062,10 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  const unsigned nS=128>car_sprites?128-car_sprites:0,nP=cap_p;
  static int8_t s_last[128],p_last[256];static int16_t p_content[256];static uint32_t p_hash[256];
  for(unsigned k=0;k<nS;k++)s_last[k]=-100;for(unsigned k=0;k<nP;k++){p_last[k]=-100;p_content[k]=-1;}
+ // resident patterns by hash (64 chains), so a tile finds a pattern with the same pixels
+ // without testing every resident one. The lowest matching number is taken, as before.
+ static int16_t p_chain_head[64],p_chain_next[256];for(unsigned b=0;b<64;b++)p_chain_head[b]=-1;
+ auto chain_of=[](uint32_t h)->unsigned{return (h^(h>>6)^(h>>12)^(h>>18)^(h>>24))&63;};
  unsigned fresh_s=0,fresh_p=0;
  static uint16_t sq[256],pq[512];static int8_t pq_last[512];unsigned sq_h=0,sq_t=0,pq_h=0,pq_t=0;
  int room4=0,room34=0;
@@ -1075,12 +1079,24 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  static uint16_t p_of[SCENERY_MAX+128];
  // users: car tiles (index SCENERY_MAX+i) and roadside sprites, row by row, car first
  static uint16_t users[SCENERY_MAX+128];unsigned nu=0;
- for(unsigned row=0;row<14;row++){
-  for(unsigned i=0;i<car_sprites;i++)if(unsigned(car.registers[i][1]-16)/16==row)users[nu++]=uint16_t(SCENERY_MAX+i);
-  for(unsigned i=0;i<S.count;i++)if(S.sprite[i].row==row)users[nu++]=uint16_t(i);
+ // one counting pass instead of one pass per row (same order: car tiles, then the rest)
+ {unsigned start[15]={0};uint8_t car_row[128];
+  for(unsigned i=0;i<car_sprites;i++){const unsigned r=unsigned(car.registers[i][1]-16)/16;car_row[i]=uint8_t(r<14?r:14);if(r<14)++start[r+1];}
+  for(unsigned i=0;i<S.count;i++)if(S.sprite[i].row<14)++start[S.sprite[i].row+1];
+  for(unsigned r=1;r<15;r++)start[r]+=start[r-1];
+  nu=start[14];
+  unsigned car_end[14];for(unsigned r=0;r<14;r++)car_end[r]=start[r];
+  for(unsigned i=0;i<car_sprites;i++)if(car_row[i]<14)users[car_end[car_row[i]]++]=uint16_t(SCENERY_MAX+i);
+  for(unsigned i=0;i<S.count;i++){const unsigned r=S.sprite[i].row;if(r<14)users[car_end[r]++]=uint16_t(i);}
  }
  static uint32_t car_pcg32[128][32];
- for(unsigned i=0;i<car_sprites;i++){const uint8_t*b=car.pcg[car.pattern_index[i]];for(unsigned q=0;q<32;q++)car_pcg32[i][q]=(uint32_t(b[q*4])<<24)|(uint32_t(b[q*4+1])<<16)|(uint32_t(b[q*4+2])<<8)|b[q*4+3];}
+ for(unsigned i=0;i<car_sprites;i++){const uint8_t*b=car.pcg[car.pattern_index[i]];
+#if defined(__BYTE_ORDER__)&&__BYTE_ORDER__==__ORDER_BIG_ENDIAN__
+  memcpy(car_pcg32[i],b,128);   // the bytes already are the big-endian longs
+#else
+  for(unsigned q=0;q<32;q++)car_pcg32[i][q]=(uint32_t(b[q*4])<<24)|(uint32_t(b[q*4+1])<<16)|(uint32_t(b[q*4+2])<<8)|b[q*4+3];
+#endif
+ }
  auto pcg_of=[&](unsigned u)->const uint32_t*{return u>=SCENERY_MAX?car_pcg32[u-SCENERY_MAX]:S.pcg[u];};
  auto content_id=[&](unsigned u)->int{return u>=SCENERY_MAX?int(SCENERY_MAX+car.pattern_index[u-SCENERY_MAX]):int(u);};
  S.car_dropped=0;
@@ -1094,7 +1110,8 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
    else if(sq_h!=sq_t&&s_last[sq[sq_h&255]]<=r-2){sn=sq[sq_h&255];sre=true;}
   }
   // a resident pattern with the same pixels
-  for(unsigned k=0;k<fresh_p&&pn<0;k++)if(p_hash[k]==hash&&p_content[k]>=0&&!memcmp(pcg_of(unsigned(p_content[k])),mine,128)){pn=k;shared=true;}
+  for(int k=p_chain_head[chain_of(hash)];k>=0;k=p_chain_next[k])
+   if(p_hash[k]==hash&&(pn<0||k<pn)&&!memcmp(pcg_of(unsigned(p_content[k])),mine,128)){pn=k;shared=true;}
   if(pn<0&&fresh_p<nP)pn=int(fresh_p);
   if(pn<0){
    // oldest first; one whose last row grew by sharing goes to the back again
@@ -1121,7 +1138,11 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   if(!is_car){sq[sq_t&255]=uint16_t(sn);++sq_t;}
   if(!shared){pq[pq_t&511]=uint16_t(pn);pq_last[pq_t&511]=int8_t(std::max<int>(p_last[pn]==-100?r:p_last[pn],r));++pq_t;}
   p_last[pn]=int8_t(std::max<int>(p_last[pn],r));p_of[u]=uint16_t(pn);
-  if(!shared){p_content[pn]=int16_t(u);p_hash[pn]=hash;jobs[njobs++]={int16_t(lp),1,0,uint16_t(pn),uint16_t(u)};}
+  if(!shared){
+   if(p_content[pn]>=0){int16_t*at=&p_chain_head[chain_of(p_hash[pn])];while(*at!=int16_t(pn))at=&p_chain_next[*at];*at=p_chain_next[pn];}
+   p_content[pn]=int16_t(u);p_hash[pn]=hash;
+   {const unsigned c=chain_of(hash);p_chain_next[pn]=p_chain_head[c];p_chain_head[c]=int16_t(pn);}
+   jobs[njobs++]={int16_t(lp),1,0,uint16_t(pn),uint16_t(u)};}
   else ++S.shared;
   if(is_car){unsigned i=u-SCENERY_MAX;car.registers[i][2]=uint16_t((car.registers[i][2]&0xff00)|(car_pattern_slot(pn)&255));}
   else{s_last[sn]=int8_t(r);S.sprite[u].kept=1;++S.kept;jobs[njobs++]={int16_t(ls),0,0,uint16_t(sn),uint16_t(u)};}
