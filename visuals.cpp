@@ -843,9 +843,11 @@ static uint32_t scenery_ref(SceneryPacket&S,unsigned off){
 struct SceneryJob{int16_t line;uint8_t pcg;uint8_t pad;uint16_t res,sprite;};
 #ifdef OR_X68K
 extern "C" uint32_t scenery_tile_finish(uint16_t*src,uint32_t rowbits,const uint32_t*rowLR,uint32_t*enc);
+extern "C" void scenery_tile_split(uint16_t*src,uint32_t rowbits,uint32_t**encp);
+extern "C" uint32_t scenery_pcg_hash(const uint32_t*enc);
 extern "C" uint32_t scenery_tile_rows(const uint16_t*src,unsigned rows,uint32_t*rowLR,const uint16_t*block_bit);
 #ifdef CBX68_ASM_CHECK
-static uint32_t asm_check[5];   // rows: calls, colour lookups left to C, mismatches; finish: calls, mismatches
+static uint32_t asm_check[7];   // rows: calls, colour lookups left to C, mismatches; finish: calls, mismatches
 #endif
 #endif
 static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,const HudPacket&hud,bool sprites_on){
@@ -1070,6 +1072,22 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   for(unsigned j=0;j<nb;j++){if(S.count>=SCENERY_MAX){++S.dropped;++scenery_overflow;continue;}++S.count;++take;}
   uint32_t hj[16];for(unsigned j=0;j<take;j++){hj[j]=2166136261UL;
    ScenerySprite&sp=S.sprite[first+j];sp.x=int16_t(tx*16+16);sp.y=int16_t(ty*16+16);sp.block=uint8_t(blocks_here[j]);sp.row=uint8_t(ty);sp.kept=0;}
+#ifdef OR_X68K
+#ifdef CBX68_ASM_CHECK
+  // asm second pass on a copy of the tile; compared with the C result below
+  static uint16_t split_px[16*320];static uint32_t split_enc[16][32];uint32_t split_hash[16];
+  const bool split_chk=chk!=0xffffffffu&&take==nb;
+  if(split_chk){uint32_t*encp[16];for(unsigned yy=0;yy<rows;yy++)memcpy(split_px+yy*320,tile_src+yy*320,32);
+   for(unsigned j=0;j<nb;j++){memset(split_enc[j],0,128);encp[blocks_here[j]+1]=split_enc[j];}
+   scenery_tile_split(split_px,rowbits,encp);for(unsigned j=0;j<nb;j++)split_hash[j]=scenery_pcg_hash(split_enc[j]);++asm_check[5];}
+#else
+  if(rows_done&&take==nb){uint32_t*encp[16];
+   for(unsigned j=0;j<nb;j++){memset(S.pcg[first+j],0,128);encp[blocks_here[j]+1]=S.pcg[first+j];}
+   scenery_tile_split(tile_src,rowbits,encp);
+   for(unsigned j=0;j<nb;j++)sprite_hash[first+j]=scenery_pcg_hash(S.pcg[first+j]);
+   continue;}
+#endif
+#endif
   for(unsigned yy=0;yy<16;yy++){uint32_t lj[16]={0},rj[16]={0};
    if(rowbits&(1u<<yy)){uint16_t*src=tile_src+yy*320;   // read again: every colour is placed by now
     for(unsigned xx=0;xx<8;xx++){unsigned q=src[xx];if(q>=256)q=lookup(q);if(q){unsigned j=ord[q>>4];lj[j]|=uint32_t(q&15)<<(28-4*xx);}
@@ -1077,6 +1095,11 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
     alias_u32*s32=(alias_u32*)src;s32[0]=s32[1]=s32[2]=s32[3]=s32[4]=s32[5]=s32[6]=s32[7]=0;}
    for(unsigned j=0;j<take;j++){uint32_t*enc=S.pcg[first+j];enc[yy]=lj[j];enc[yy+16]=rj[j];hj[j]^=lj[j];hj[j]*=16777619UL;hj[j]^=rj[j];hj[j]*=16777619UL;}}
   for(unsigned j=0;j<take;j++)sprite_hash[first+j]=hj[j];
+#if defined(OR_X68K)&&defined(CBX68_ASM_CHECK)
+  if(split_chk){bool bad=false;for(unsigned j=0;j<nb;j++)if(split_hash[j]!=hj[j]||memcmp(split_enc[j],S.pcg[first+j],128))bad=true;
+   for(unsigned yy=0;yy<rows&&!bad;yy++)if(rowbits&(1u<<yy))for(unsigned xx=0;xx<16;xx++)if(split_px[yy*320+xx])bad=true;
+   if(bad)++asm_check[6];}
+#endif
   }
  }
  // learn which colours each bank uses (planned and met), then clear the tables
@@ -1584,7 +1607,7 @@ void visuals_print(){
  report_printf("R027 HUD pixels total=%llu approx=%llu\n",(unsigned long long)hud_pixels_total,(unsigned long long)hud_pixels_approx);
 #endif
 #ifdef CBX68_ASM_CHECK
- report_printf("ASM CHECK tile_rows calls=%lu to_c=%lu mismatches=%lu finish calls=%lu mismatches=%lu\n",(unsigned long)asm_check[0],(unsigned long)asm_check[1],(unsigned long)asm_check[2],(unsigned long)asm_check[3],(unsigned long)asm_check[4]);
+ report_printf("ASM CHECK tile_rows calls=%lu to_c=%lu mismatches=%lu finish calls=%lu mismatches=%lu split calls=%lu mismatches=%lu\n",(unsigned long)asm_check[0],(unsigned long)asm_check[1],(unsigned long)asm_check[2],(unsigned long)asm_check[3],(unsigned long)asm_check[4],(unsigned long)asm_check[5],(unsigned long)asm_check[6]);
 #endif
  report_printf("R026 PHASES us capture=%lu colours=%lu tiles=%lu rest=%lu\n",(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_colour*50UL),(unsigned long)(scenery_fine_tiles*50UL),(unsigned long)((scenery_fine_total-scenery_fine_capture-scenery_fine_colour-scenery_fine_tiles)*50UL));
  report_printf("R026 DIAG entries=%lu off=%lu hidden=%lu priority=%lu car=%lu passed=%lu frames_rows=%lu count=%u\n",(unsigned long)scenery_diag[0],(unsigned long)scenery_diag[1],(unsigned long)scenery_diag[2],(unsigned long)scenery_diag[3],(unsigned long)scenery_diag[4],(unsigned long)scenery_diag[5],(unsigned long)scenery_diag[6],(unsigned)osprites.sprite_count);

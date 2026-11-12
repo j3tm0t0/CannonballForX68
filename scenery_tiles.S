@@ -120,3 +120,86 @@ scenery_tile_finish:
 4:
  movem.l (%sp)+,%d2-%d4
  rts
+
+/* Second pass of a tile with several palette blocks (68020+).
+   void scenery_tile_split(uint16_t* src, uint32_t rowbits, uint32_t** encp)
+     encp[code>>4] = pattern (32 longs, zeroed by the caller) of the block of that pixel code
+   Every pixel code must be < 256 (scenery_tile_rows returned a result for this tile).
+   ORs each pixel's nibble into the pattern of its block and clears the rows named in rowbits. */
+.globl scenery_tile_split
+scenery_tile_split:
+ movem.l %d2-%d6/%a2,-(%sp)
+ move.l 28(%sp),%a0
+ move.l 32(%sp),%d3
+ move.l 36(%sp),%a2
+ moveq #15,%d2
+ moveq #0,%d5            /* row*4 */
+ moveq #64,%d6           /* row*4+64 */
+ tst.l %d3
+ beq 9f
+1:
+ lsr.l #1,%d3
+ bcc 5f
+ moveq #28,%d4
+ .rept 8
+ move.w (%a0)+,%d0
+ beq 2f
+ move.w %d0,%d1
+ lsr.w #4,%d1
+ move.l (%a2,%d1.w*4),%a1
+ and.l %d2,%d0
+ lsl.l %d4,%d0
+ or.l %d0,(%a1,%d5.l)
+2:
+ subq.l #4,%d4
+ .endr
+ moveq #28,%d4
+ .rept 8
+ move.w (%a0)+,%d0
+ beq 2f
+ move.w %d0,%d1
+ lsr.w #4,%d1
+ move.l (%a2,%d1.w*4),%a1
+ and.l %d2,%d0
+ lsl.l %d4,%d0
+ or.l %d0,(%a1,%d6.l)
+2:
+ subq.l #4,%d4
+ .endr
+ moveq #0,%d0
+ move.l %d0,-(%a0)
+ move.l %d0,-(%a0)
+ move.l %d0,-(%a0)
+ move.l %d0,-(%a0)
+ move.l %d0,-(%a0)
+ move.l %d0,-(%a0)
+ move.l %d0,-(%a0)
+ move.l %d0,-(%a0)
+5:
+ lea 640(%a0),%a0
+ addq.l #4,%d5
+ addq.l #4,%d6
+ tst.l %d3
+ bne 1b
+9:
+ movem.l (%sp)+,%d2-%d6/%a2
+ rts
+
+/* uint32_t scenery_pcg_hash(const uint32_t* enc): FNV-1a over left,right of row 0..15 */
+.globl scenery_pcg_hash
+scenery_pcg_hash:
+ movem.l %d2-%d3,-(%sp)
+ move.l 12(%sp),%a0
+ move.l #2166136261,%d0
+ move.l #16777619,%d2
+ moveq #15,%d3
+1:
+ move.l (%a0)+,%d1
+ eor.l %d1,%d0
+ mulu.l %d2,%d0
+ move.l 60(%a0),%d1
+ eor.l %d1,%d0
+ mulu.l %d2,%d0
+ dbra %d3,1b
+ movem.l (%sp)+,%d2-%d3
+ rts
