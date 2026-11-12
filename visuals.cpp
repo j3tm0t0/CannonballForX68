@@ -1198,8 +1198,9 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  auto pcg_of=[&](unsigned u)->const uint32_t*{return u>=SCENERY_MAX?car_pcg32[u-SCENERY_MAX]:S.pcg[u];};
  auto content_id=[&](unsigned u)->int{return u>=SCENERY_MAX?int(SCENERY_MAX+car.pattern_index[u-SCENERY_MAX]):int(u);};
  // the longs that differ between two patterns, and what writing them costs (2 a run + the data)
- auto diff_mask=[](const uint32_t*a,const uint32_t*b)->uint32_t{uint32_t m=0;for(unsigned q=0;q<32;q++)if(a[q]!=b[q])m|=1u<<q;return m;};
+ // A mask in many short runs can cost more than the whole pattern (34): then the whole pattern.
  auto mask_cost=[](uint32_t m)->unsigned{return unsigned(__builtin_popcount(m))+2u*unsigned(__builtin_popcount(m&~(m<<1)));};
+ auto diff_mask=[&](const uint32_t*a,const uint32_t*b)->uint32_t{uint32_t m=0;for(unsigned q=0;q<32;q++)if(a[q]!=b[q])m|=1u<<q;return mask_cost(m)>34?0xffffffffu:m;};
  S.car_dropped=0;
  for(unsigned q=0;q<nu;q++){const unsigned u=users[q];const bool is_car=u>=SCENERY_MAX;
   const int r=is_car?int(car.registers[u-SCENERY_MAX][1]-16)/16:S.sprite[u].row;
@@ -1255,6 +1256,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // 5. job lists: vertical blank first, then one list per raster interrupt
  unsigned off=0;
  auto emit=[&](const SceneryJob&j,uint32_t m){
+  if(off+300>SCENERY_JOB_LONGS){++scenery_overflow;return;}   // never past the buffer (room for a job and the list ends)
   if(!j.pcg){const ScenerySprite&sp=S.sprite[j.sprite];unsigned n=car_sprites+j.res,pattern=car_pattern_slot(p_of[j.sprite]);
    S.jobs[off++]=0xeb0000UL+n*8;S.jobs[off++]=1;
    S.jobs[off++]=(uint32_t(uint16_t(sp.x))<<16)|uint16_t(sp.y);
@@ -1268,7 +1270,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  static int16_t head[SCENERY_LINES+1],next_job[2*(SCENERY_MAX+128)];
  for(unsigned l=0;l<=SCENERY_LINES;l++)head[l]=-1;
  for(int k=int(njobs)-1;k>=0;k--){unsigned l=jobs[k].line<0?SCENERY_LINES:unsigned(jobs[k].line);next_job[k]=head[l];head[l]=int16_t(k);}
- auto emit_pal=[&](unsigned b){S.jobs[off++]=0xe82200UL;S.jobs[off++]=7;for(unsigned q=0;q<8;q++)S.jobs[off++]=(uint32_t(hud.band_pal[b][q*2])<<16)|hud.band_pal[b][q*2+1];};
+ auto emit_pal=[&](unsigned b){if(off+300>SCENERY_JOB_LONGS){++scenery_overflow;return;}S.jobs[off++]=0xe82200UL;S.jobs[off++]=7;for(unsigned q=0;q<8;q++)S.jobs[off++]=(uint32_t(hud.band_pal[b][q*2])<<16)|hud.band_pal[b][q*2+1];};
  const unsigned first_off=off;S.start_job=scenery_ref(S,off);
  if(hud.active&&hud.bands)emit_pal(0);
  for(int k=head[SCENERY_LINES];k>=0;k=next_job[k])emit(jobs[k],0xffffffffu);
