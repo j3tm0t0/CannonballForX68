@@ -16,6 +16,7 @@ RoadRow* volatile road_active=0;
 RoadRow* volatile road_pending=0;
 RoadRow* volatile road_scan=0;
 volatile uint32_t road_vblanks=0,road_shown=0,road_irq_count=0;
+static uint32_t io_probe_ns[5],io_probe_n[5];
 #ifdef CBX68_PROF
 // sampling profiler (road_irq.S): hits per 16 bytes of text, last bucket = outside the program
 extern "C"{extern char _start[],_etext[];uint32_t prof_text_size=0;uint32_t prof_hist[(0x140000>>4)+1];}
@@ -162,6 +163,15 @@ static void native_road_memory_check(){
 static void native_road_memory_report(){ report_printf("ROAD MEMORY map_errors=%u pattern_errors=%u ground_errors=%u\n",road_map_errors,road_pattern_errors,road_ground_errors);}
 static void platform_exit(){
  uint32_t t=native_elapsed();unsigned short sr=mask_irqs();
+ // Bus speed probe: ns per 32-bit write to RAM, PCG, BG scroll, text palette and CRTC R09.
+ // Run before the sprite display is turned off: XEiJ (and the real sprite controller) make the
+ // CPU wait longer for the PCG while the display is on. Interrupts are off here, so time is read straight from the MFP timer C counter (50 us a step).
+ {static uint32_t probe_ram;static const uint32_t probe_at[5]={0,0xeb8000UL,0xeb0800UL,0xe82200UL,0xe80012UL};
+  for(unsigned k=0;k<5;k++){volatile uint32_t*q=k?(volatile uint32_t*)probe_at[k]:(volatile uint32_t*)&probe_ram;const uint32_t v=*q;
+   unsigned t0=HW8(0xe88023),t=t0;while(t==t0)t=HW8(0xe88023);t0=t;   // start on a step edge
+   uint32_t n=0;unsigned steps=0;
+   while(steps<40&&n<400000UL){for(unsigned j=0;j<8;j++){*q=v;*q=v;*q=v;*q=v;}n+=32;t=HW8(0xe88023);steps=(t0+200-t)%200;}
+   io_probe_ns[k]=steps?steps*50000UL/n:0;io_probe_n[k]=n;}}
  HW8(0xe88019)=0;HW16(0xe80012)=1023;HW16(0xeb0808)=0;
  *(volatile uint32_t*)0x134=saved_vblank;*(volatile uint32_t*)0x138=saved_raster;
  HW8(0xe88003)=saved_aer;HW8(0xe88007)=saved_iera;HW8(0xe88013)=saved_imra;
@@ -191,6 +201,7 @@ static void platform_exit(){
  report_printf("bg_columns=%lu car_frames=%lu car_tiles=%lu max_tiles=%u max_patterns=%u max_line=%u overflow=%lu\n",(unsigned long)background_columns,(unsigned long)car_frames,(unsigned long)car_tiles_total,car_peak_tiles,car_peak_patterns,car_peak_line,(unsigned long)car_overflows);
  report_printf("car_text_frames=%lu\n",(unsigned long)car_text_frames);
  report_printf("shown_x1000=%lu\n",t?road_shown*100000UL/t:0);
+ report_printf("IOSPEED ns/long ram=%lu pcg=%lu bg=%lu pal=%lu crtc=%lu\n",(unsigned long)io_probe_ns[0],(unsigned long)io_probe_ns[1],(unsigned long)io_probe_ns[2],(unsigned long)io_probe_ns[3],(unsigned long)io_probe_ns[4]);
  report_printf("vblanks=%lu raster_irqs=%lu\n",(unsigned long)road_vblanks,(unsigned long)road_irq_count);
  {
   uint32_t fine_total=fine_last-fine_start;
