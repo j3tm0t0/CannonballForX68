@@ -16,6 +16,7 @@ RoadRow* volatile road_active=0;
 RoadRow* volatile road_pending=0;
 RoadRow* volatile road_scan=0;
 volatile uint32_t road_vblanks=0,road_shown=0,road_irq_count=0;
+extern "C"{volatile uint8_t road_vblank_busy=0;volatile uint32_t road_vblank_overruns=0;}
 static uint32_t io_probe_ns[5],io_probe_n[5];
 #ifdef CBX68_PROF
 // sampling profiler (road_irq.S): hits per 16 bytes of text, last bucket = outside the program
@@ -202,7 +203,7 @@ static void platform_exit(){
  report_printf("car_text_frames=%lu\n",(unsigned long)car_text_frames);
  report_printf("shown_x1000=%lu\n",t?road_shown*100000UL/t:0);
  report_printf("IOSPEED ns/long ram=%lu pcg=%lu bg=%lu pal=%lu crtc=%lu\n",(unsigned long)io_probe_ns[0],(unsigned long)io_probe_ns[1],(unsigned long)io_probe_ns[2],(unsigned long)io_probe_ns[3],(unsigned long)io_probe_ns[4]);
- report_printf("vblanks=%lu raster_irqs=%lu\n",(unsigned long)road_vblanks,(unsigned long)road_irq_count);
+ report_printf("vblanks=%lu raster_irqs=%lu vblank_overruns=%lu\n",(unsigned long)road_vblanks,(unsigned long)road_irq_count,(unsigned long)road_vblank_overruns);
  {
   uint32_t fine_total=fine_last-fine_start;
   report_printf("FINE r024 unit=50us total=%lu cs_equiv=%lu tcdr=%u..%u backsteps=%lu retries=%lu\n",(unsigned long)fine_total,(unsigned long)(fine_total/200),fine_tmin,fine_tmax,(unsigned long)fine_backsteps,(unsigned long)fine_retries);

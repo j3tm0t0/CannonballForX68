@@ -825,7 +825,10 @@ static uint32_t scenery_car_dropped=0,scenery_shared_total=0,scenery_frames=0,sc
 static unsigned scenery_peak=0,scenery_line_peak=0,scenery_block_peak=0;
 static uint32_t scenery_reuse_frames=0;   // r030
 uint32_t scenery_fine_total=0,scenery_fine_capture=0,scenery_fine_max=0,scenery_fine_colour=0,scenery_fine_tiles=0;
-static const unsigned SCENERY_LINE_BUDGET=96;   // longs per raster interrupt (two patterns + registers)
+#ifndef CBX68_BUDGET
+#define CBX68_BUDGET 96
+#endif
+static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;   // longs per raster interrupt (two patterns + registers)
 #ifndef OR_X68K
 static unsigned scenery_entry_list[256],scenery_entry_count=0;
 static uint64_t scenery_dropped_pixels=0,scenery_pixels_total=0,scenery_shadow_pixels=0;
@@ -1286,8 +1289,19 @@ static void scenery_run(const uint32_t*j){
 #endif
  }
 }
+#if defined(OR_X68K)&&defined(CBX68_TRACE)
+extern volatile uint32_t road_irq_count;
+static uint32_t irq_hist[16],irq_hist_last=0;   // frames by raster interrupts taken (16 a bucket, 224 = all)
+#endif
+#ifdef OR_X68K
+extern RoadRow* volatile road_scan;
+#endif
+// Runs in the vertical blank interrupt with the raster interrupts enabled (road_irq.S); the
+// caller has set scenery_scan to 0, so no line job runs while the start state is loaded.
 extern "C" void scenery_vblank(const RoadRow*rows){
- scenery_scan=(uint32_t)(uintptr_t)scenery_zero;
+#if defined(OR_X68K)&&defined(CBX68_TRACE)
+ {const uint32_t n=road_irq_count,d=n-irq_hist_last;irq_hist_last=n;++irq_hist[d>=240?15:d>>4];}
+#endif
  if(!rows)return;
  const RoadFrame*f=(const RoadFrame*)rows;
  if(!(f->visual.flags&2)&&!f->visual.hud.active)return;
@@ -1295,7 +1309,15 @@ extern "C" void scenery_vblank(const RoadRow*rows){
 #ifdef OR_X68K
  if(S.start_job)scenery_run((const uint32_t*)S.start_job);
 #endif
+#ifdef OR_X68K
+ // continue at the line the raster interrupts have reached (line 0 unless the blank's work ran long)
+ {uint16_t sr;__asm__ volatile("move.w %%sr,%0\n ori.w #0x0700,%%sr":"=d"(sr));
+  const unsigned done=unsigned((const RoadRow*)road_scan-rows);
+  scenery_scan=done<SCENERY_LINES?(uint32_t)(uintptr_t)(S.line_job+done):0;
+  __asm__ volatile("move.w %0,%%sr"::"d"(sr));}
+#else
  scenery_scan=(uint32_t)(uintptr_t)S.line_job;
+#endif
 }
 #ifndef OR_X68K
 // PC: run the job lists on a model of the sprite registers and PCG, draw every line with the
@@ -1635,6 +1657,7 @@ void visuals_print(){
  report_printf("ASM CHECK tile_rows calls=%lu to_c=%lu mismatches=%lu finish calls=%lu mismatches=%lu split calls=%lu mismatches=%lu\n",(unsigned long)asm_check[0],(unsigned long)asm_check[1],(unsigned long)asm_check[2],(unsigned long)asm_check[3],(unsigned long)asm_check[4],(unsigned long)asm_check[5],(unsigned long)asm_check[6]);
 #endif
 #ifdef CBX68_TRACE
+ report_printf("TRACE irqs/frame");for(unsigned k=0;k<16;k++)report_printf(" %lu",(unsigned long)irq_hist[k]);report_printf("\n");
  {FILE*tf=fopen("FRAMES.BIN","wb");if(tf){fwrite(frame_trace,12,frame_trace_n,tf);fclose(tf);}}
 #endif
  report_printf("R026 PHASES us capture=%lu colours=%lu tiles=%lu rest=%lu\n",(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_colour*50UL),(unsigned long)(scenery_fine_tiles*50UL),(unsigned long)((scenery_fine_total-scenery_fine_capture-scenery_fine_colour-scenery_fine_tiles)*50UL));

@@ -9,24 +9,44 @@ road_vblank_irq:
  /* Preserve every data/address register across the C callback and its helpers. */
  movem.l %d0-%d7/%a0-%a6,-(%sp)
  addq.l #1,road_vblanks
- move.l road_pending,%d0
+ /* The raster interrupts of this frame are armed first, and the work of the vertical blank
+    (commit, sprite start state) then runs with them enabled: when that work takes longer than
+    the blank, the top lines get their raster data late instead of the whole frame losing it. */
+ tst.b road_vblank_busy
+ beq 3f
+ /* the previous blank's work is still running: only restart the raster lines */
+ addq.l #1,road_vblank_overruns
+ clr.l scenery_scan
+ move.l road_active,road_scan
+ move.w #72,0xe80012
+ bclr #5,0xe8800f
+ movem.l (%sp)+,%d0-%d7/%a0-%a6
+ rte
+3:
+ st road_vblank_busy
+ move.l road_pending,%d7
  beq 1f
- move.l %d0,-(%sp)
- jsr visuals_native_commit
- addq.l #4,%sp
- move.l road_pending,%d0
- move.l %d0,road_active
+ move.l %d7,road_active
  clr.l road_pending
  addq.l #1,road_shown
 1:
+ clr.l scenery_scan            /* no line jobs until scenery_vblank has loaded the start state */
+ move.l road_active,road_scan
+ move.w #72,0xe80012
+ bclr #5,0xe8800f
+ move.w #0x2500,%sr
+ tst.l %d7
+ beq 2f
+ move.l %d7,-(%sp)
+ jsr visuals_native_commit
+ addq.l #4,%sp
+2:
  /* r026: scenery sprites of the shown frame: load the frame-start state, point at its line jobs */
  move.l road_active,-(%sp)
  jsr scenery_vblank
  addq.l #4,%sp
- move.l road_active,%a0
- move.l %a0,road_scan
- move.w #72,0xe80012
- bclr #5,0xe8800f
+ move.w #0x2600,%sr
+ sf road_vblank_busy
  movem.l (%sp)+,%d0-%d7/%a0-%a6
  rte
 road_raster_irq:
