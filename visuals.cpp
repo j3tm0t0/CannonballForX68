@@ -825,8 +825,11 @@ static uint32_t scenery_car_dropped=0,scenery_shared_total=0,scenery_frames=0,sc
 static unsigned scenery_peak=0,scenery_line_peak=0,scenery_block_peak=0;
 static uint32_t scenery_reuse_frames=0;   // r030
 uint32_t scenery_fine_total=0,scenery_fine_capture=0,scenery_fine_max=0,scenery_fine_colour=0,scenery_fine_tiles=0;
+// 64: what one line period (63.5 us) takes. A long written to the PCG with the sprite display on
+// costs about 1.1 us (XEiJ, IOSPEED line of the report), and with 96 a quarter of the job lists
+// finished after their tile row had begun (16 MHz, start scene); with 64 none did.
 #ifndef CBX68_BUDGET
-#define CBX68_BUDGET 96
+#define CBX68_BUDGET 64
 #endif
 #ifndef CBX68_REWRITTEN_FIRST
 #define CBX68_REWRITTEN_FIRST 1
@@ -837,7 +840,7 @@ static const bool SCENERY_REWRITTEN_FIRST=CBX68_REWRITTEN_FIRST;
 #endif
 static const bool SCENERY_DIFF=CBX68_DIFF;   // a pattern rewritten by a line job: only the longs that differ from what it held
 static uint32_t scenery_start_longs=0,scenery_restart_longs=0,scenery_line_longs=0;   // job list sizes, summed over the frames
-static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;   // longs per raster interrupt (two patterns + registers)
+static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;   // longs per raster interrupt
 #ifndef OR_X68K
 static unsigned scenery_entry_list[256],scenery_entry_count=0;
 static uint64_t scenery_dropped_pixels=0,scenery_pixels_total=0,scenery_shadow_pixels=0;
@@ -1317,7 +1320,7 @@ static void build_scenery(SceneryPacket&S,const uint16_t*pal,CarPacket&car,const
 }
 // Raster/vblank side. scenery_scan points at the job pointer of the next raster interrupt.
 static uint32_t scenery_zero[SCENERY_LINES];
-extern "C" {volatile uint32_t scenery_scan=0;volatile uint16_t scenery_owed=0,scenery_owed_max=0;volatile uint32_t scenery_late_lines=0;volatile uint8_t scenery_busy=0,scenery_gen=0;void scenery_vblank(const RoadRow*rows);}
+extern "C" {volatile uint32_t scenery_scan=0;volatile uint16_t scenery_owed=0,scenery_owed_max=0;volatile uint32_t scenery_late_lines=0,scenery_missed=0;volatile uint16_t scenery_line=0;volatile uint8_t scenery_busy=0,scenery_gen=0;void scenery_vblank(const RoadRow*rows);}
 static void scenery_run(const uint32_t*j){
  while(uint32_t dst=*j++){uint32_t n=*j++ +1;
 #ifdef OR_X68K
@@ -1364,7 +1367,7 @@ extern "C" void scenery_vblank(const RoadRow*rows){
  // continue at the line the raster interrupts have reached (line 0 unless the blank's work ran long)
  {uint16_t sr;__asm__ volatile("move.w %%sr,%0\n ori.w #0x0700,%%sr":"=d"(sr));
   const unsigned done=unsigned((const RoadRow*)road_scan-rows);
-  scenery_scan=done<SCENERY_LINES?(uint32_t)(uintptr_t)(S.line_job+done):0;scenery_owed=0;
+  scenery_scan=done<SCENERY_LINES?(uint32_t)(uintptr_t)(S.line_job+done):0;scenery_owed=0;scenery_line=uint16_t(done);
   __asm__ volatile("move.w %0,%%sr"::"d"(sr));
   bool skipped=done>=SCENERY_LINES;for(unsigned l=0;l<done&&!skipped;l++)if(S.line_job[l])skipped=true;
   // not when a job list of the old frame was still being written: its last run lands after this start state
@@ -1717,7 +1720,7 @@ void visuals_print(){
  report_printf("ASM CHECK tile_rows calls=%lu to_c=%lu mismatches=%lu finish calls=%lu mismatches=%lu split calls=%lu mismatches=%lu\n",(unsigned long)asm_check[0],(unsigned long)asm_check[1],(unsigned long)asm_check[2],(unsigned long)asm_check[3],(unsigned long)asm_check[4],(unsigned long)asm_check[5],(unsigned long)asm_check[6]);
 #endif
 #ifdef CBX68_TRACE
- report_printf("TRACE irqs/frame");for(unsigned k=0;k<16;k++)report_printf(" %lu",(unsigned long)irq_hist[k]);report_printf("\nTRACE jobs lag_max=%u late_lines=%lu restarts=%lu skipped_blanks=%lu\n",(unsigned)scenery_owed_max,(unsigned long)scenery_late_lines,(unsigned long)scenery_restarts,(unsigned long)scenery_skipped_blanks);
+ report_printf("TRACE irqs/frame");for(unsigned k=0;k<16;k++)report_printf(" %lu",(unsigned long)irq_hist[k]);report_printf("\nTRACE jobs lag_max=%u late_lines=%lu missed_lists=%lu restarts=%lu skipped_blanks=%lu\n",(unsigned)scenery_owed_max,(unsigned long)scenery_late_lines,(unsigned long)scenery_missed,(unsigned long)scenery_restarts,(unsigned long)scenery_skipped_blanks);
  {FILE*tf=fopen("FRAMES.BIN","wb");if(tf){fwrite(frame_trace,12,frame_trace_n,tf);fclose(tf);}}
 #endif
  report_printf("R026 PHASES us capture=%lu colours=%lu tiles=%lu rest=%lu\n",(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_colour*50UL),(unsigned long)(scenery_fine_tiles*50UL),(unsigned long)((scenery_fine_total-scenery_fine_capture-scenery_fine_colour-scenery_fine_tiles)*50UL));

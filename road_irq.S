@@ -132,6 +132,9 @@ road_raster_irq:
  beq 9f
  move.l %d0,%a0
  addq.l #4,scenery_scan
+#ifdef CBX68_TRACE
+ addq.w #1,scenery_line
+#endif
  move.l (%a0),%d0
  beq 3b
  move.l %d0,%a1
@@ -150,6 +153,20 @@ road_raster_irq:
  bra 4b
 5:
  move.w #0x2600,%sr
+#ifdef CBX68_TRACE
+ /* The list of line 16k+3+p (p = 0..10) is for tile row k+1, shown from line 16k+16: it is
+    too late when 13-p or more line interrupts have come in since its own. */
+ move.w scenery_line,%d0
+ subq.w #4,%d0
+ and.w #15,%d0
+ cmp.w #10,%d0
+ bhi 3b
+ moveq #13,%d1
+ sub.w %d0,%d1
+ cmp.w scenery_owed,%d1
+ bhi 3b
+ addq.l #1,scenery_missed
+#endif
  bra 3b
 9:
  sf scenery_busy
