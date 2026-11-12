@@ -108,10 +108,15 @@ road_raster_irq:
  beq 2f
  addq.w #1,scenery_owed
 #ifdef CBX68_TRACE
+ /* how far the jobs are behind: the largest count, and the lines where it is over 3 */
  move.w scenery_owed,%a0
  cmp.w scenery_owed_max,%a0
  bls 8f
  move.w %a0,scenery_owed_max
+8:
+ cmp.w #3,%a0
+ bls 8f
+ addq.l #1,scenery_late_lines
 8:
 #endif
  tst.b scenery_busy
