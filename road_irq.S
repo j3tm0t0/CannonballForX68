@@ -31,6 +31,20 @@ road_vblank_irq:
  rte
 road_raster_irq:
  move.l %a0,-(%sp)
+#ifdef CBX68_PROF
+ /* sampling profiler: count the interrupted PC in 16-byte buckets of the program text */
+ move.l %d0,-(%sp)
+ move.l 10(%sp),%d0
+ sub.l #_start,%d0
+ cmp.l prof_text_size,%d0
+ bcs 7f
+ move.l prof_text_size,%d0
+7:
+ lsr.l #4,%d0
+ lea prof_hist,%a0
+ addq.l #1,(%a0,%d0.l*4)
+ move.l (%sp)+,%d0
+#endif
  addq.l #1,road_irq_count
  move.l road_scan,%a0
  move.l (%a0)+,0xeb0800
