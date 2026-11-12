@@ -26,6 +26,14 @@ road_vblank_irq:
  rte
 3:
  st road_vblank_busy
+ /* how the pass of the last frame ended (scenery_vblank: may the start state be loaded in part) */
+ move.l road_scan,road_scan_end
+ tst.b scenery_busy
+ sne scenery_unfinished
+ tst.w scenery_owed
+ beq 4f
+ st scenery_unfinished
+4:
  move.l road_pending,%d7
  beq 1f
  move.l %d7,road_active
