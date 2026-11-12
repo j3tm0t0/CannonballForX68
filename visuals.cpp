@@ -1248,13 +1248,24 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   S.line_longs_max=std::max<unsigned>(S.line_longs_max,line_load[l]);}
  (void)content_id;
 }
+#if defined(OR_X68K)&&defined(CBX68_TRACE)
+// per frame: scenery, capture, tiles (50us units), sprites, game sprite entries, dropped -> FRAMES.BIN
+static uint16_t frame_trace[4096][6];static unsigned frame_trace_n=0;
+#endif
 static void build_scenery(SceneryPacket&S,const uint16_t*pal,CarPacket&car,const HudPacket&hud,bool sprites_on){
 #ifdef OR_X68K
  uint32_t t=platform_fine_clock();
+#ifdef CBX68_TRACE
+ const uint32_t trace_c=scenery_fine_capture,trace_t=scenery_fine_tiles;
+#endif
 #endif
  build_scenery_body(S,pal,car,hud,sprites_on);
 #ifdef OR_X68K
  uint32_t d=platform_fine_clock()-t;scenery_fine_total+=d;if(d>scenery_fine_max)scenery_fine_max=d;
+#ifdef CBX68_TRACE
+ if(frame_trace_n<4096){uint16_t*r=frame_trace[frame_trace_n++];r[0]=uint16_t(d);r[1]=uint16_t(scenery_fine_capture-trace_c);r[2]=uint16_t(scenery_fine_tiles-trace_t);
+  r[3]=S.count;r[4]=uint16_t(osprites.sprite_count);r[5]=uint16_t(S.dropped);}
+#endif
 #endif
  ++scenery_frames;scenery_car_dropped+=S.car_dropped;scenery_shared_total+=S.shared;scenery_count_total+=S.count;scenery_dropped_total+=S.dropped;scenery_reused_total+=S.reused;scenery_bank_drops+=S.dropped_banks;
  scenery_peak=std::max<unsigned>(scenery_peak,S.count);scenery_line_peak=std::max<unsigned>(scenery_line_peak,S.line_longs_max);scenery_block_peak=std::max<unsigned>(scenery_block_peak,S.blocks);
@@ -1618,6 +1629,9 @@ void visuals_print(){
 #endif
 #ifdef CBX68_ASM_CHECK
  report_printf("ASM CHECK tile_rows calls=%lu to_c=%lu mismatches=%lu finish calls=%lu mismatches=%lu split calls=%lu mismatches=%lu\n",(unsigned long)asm_check[0],(unsigned long)asm_check[1],(unsigned long)asm_check[2],(unsigned long)asm_check[3],(unsigned long)asm_check[4],(unsigned long)asm_check[5],(unsigned long)asm_check[6]);
+#endif
+#ifdef CBX68_TRACE
+ {FILE*tf=fopen("FRAMES.BIN","wb");if(tf){fwrite(frame_trace,12,frame_trace_n,tf);fclose(tf);}}
 #endif
  report_printf("R026 PHASES us capture=%lu colours=%lu tiles=%lu rest=%lu\n",(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_colour*50UL),(unsigned long)(scenery_fine_tiles*50UL),(unsigned long)((scenery_fine_total-scenery_fine_capture-scenery_fine_colour-scenery_fine_tiles)*50UL));
  report_printf("R026 DIAG entries=%lu off=%lu hidden=%lu priority=%lu car=%lu passed=%lu frames_rows=%lu count=%u\n",(unsigned long)scenery_diag[0],(unsigned long)scenery_diag[1],(unsigned long)scenery_diag[2],(unsigned long)scenery_diag[3],(unsigned long)scenery_diag[4],(unsigned long)scenery_diag[5],(unsigned long)scenery_diag[6],(unsigned)osprites.sprite_count);
