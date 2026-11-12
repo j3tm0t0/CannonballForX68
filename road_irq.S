@@ -5,6 +5,8 @@
 .even
 .globl road_vblank_irq
 .globl road_raster_irq
+.lcomm vblank_frame,4
+.lcomm vblank_deferred,2
 road_vblank_irq:
  /* Preserve every data/address register across the C callback and its helpers. */
  movem.l %d0-%d7/%a0-%a6,-(%sp)
@@ -40,27 +42,40 @@ road_vblank_irq:
  clr.l road_pending
  addq.l #1,road_shown
 1:
+ move.l %d7,vblank_frame
  clr.l scenery_scan            /* no line jobs until scenery_vblank has loaded the start state */
  clr.w scenery_owed
  addq.b #1,scenery_gen           /* a job list of the old frame that is still being written stops */
  move.l road_active,road_scan
  move.w #72,0xe80012
  bclr #5,0xe8800f
- move.w #0x2500,%sr
- tst.l %d7
+ /* A raster interrupt below us is still writing a job list of the old frame: the run it is in
+    would land after the new start state. Its loop does the work of this blank when it stops. */
+ tst.b scenery_busy
  beq 2f
- move.l %d7,-(%sp)
- jsr visuals_native_commit
- addq.l #4,%sp
+ st vblank_deferred
+ movem.l (%sp)+,%d0-%d7/%a0-%a6
+ rte
 2:
- /* r026: scenery sprites of the shown frame: load the frame-start state, point at its line jobs */
- move.l road_active,-(%sp)
- jsr scenery_vblank
- addq.l #4,%sp
+ move.w #0x2500,%sr
+ bsr vblank_work
  move.w #0x2600,%sr
  sf road_vblank_busy
  movem.l (%sp)+,%d0-%d7/%a0-%a6
  rte
+/* commit of a new frame and the scenery start state; called at mask 5, d0-d1/a0-a1 are lost */
+vblank_work:
+ move.l vblank_frame,%d0
+ beq 1f
+ move.l %d0,-(%sp)
+ jsr visuals_native_commit
+ addq.l #4,%sp
+1:
+ /* r026: scenery sprites of the shown frame: load the frame-start state, point at its line jobs */
+ move.l road_active,-(%sp)
+ jsr scenery_vblank
+ addq.l #4,%sp
+ rts
 road_raster_irq:
  move.l %a0,-(%sp)
 #ifdef CBX68_PROF
@@ -170,6 +185,15 @@ road_raster_irq:
  bra 3b
 9:
  sf scenery_busy
+ tst.b vblank_deferred
+ beq 7f
+ /* a vertical blank came in while this loop was writing: its work is done here */
+ sf vblank_deferred
+ move.w #0x2500,%sr
+ bsr vblank_work
+ move.w #0x2600,%sr
+ sf road_vblank_busy
+7:
  movem.l (%sp)+,%d0-%d2/%a1-%a2
 2:
  move.l (%sp)+,%a0

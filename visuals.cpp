@@ -1341,7 +1341,8 @@ extern RoadRow* volatile road_scan;
 extern "C"{RoadRow* volatile road_scan_end=0;volatile uint8_t scenery_unfinished=0;}   // set by road_vblank_irq: where the last pass ended
 static const RoadRow*vblank_rows=0;static bool vblank_state_ok=false;static uint32_t scenery_restarts=0,scenery_skipped_blanks=0;
 #endif
-// Runs in the vertical blank interrupt with the raster interrupts enabled (road_irq.S); the
+// Runs at interrupt mask 5 with the raster interrupts enabled (road_irq.S: from the vertical
+// blank interrupt, or from the raster interrupt whose job loop that blank found running); the
 // caller has set scenery_scan to 0, so no line job runs while the start state is loaded.
 extern "C" void scenery_vblank(const RoadRow*rows){
 #if defined(OR_X68K)&&defined(CBX68_TRACE)
@@ -1366,15 +1367,17 @@ extern "C" void scenery_vblank(const RoadRow*rows){
  vblank_rows=rows;vblank_state_ok=false;
  if(again){if(S.restart_job)scenery_run((const uint32_t*)S.restart_job);++scenery_restarts;}
  else if(S.start_job)scenery_run((const uint32_t*)S.start_job);
- // continue at the line the raster interrupts have reached (line 0 unless the blank's work ran long)
+ // The line jobs start at line 0. When the blank's work ran long, the raster interrupts have
+ // already passed some lines: those are owed, and the loop of the next raster interrupt writes
+ // their lists first, late but in order (a pattern job holds only the longs that differ from
+ // what the job before it left, so none may be left out).
  {uint16_t sr;__asm__ volatile("move.w %%sr,%0\n ori.w #0x0700,%%sr":"=d"(sr));
   const unsigned done=unsigned((const RoadRow*)road_scan-rows);
-  scenery_scan=done<SCENERY_LINES?(uint32_t)(uintptr_t)(S.line_job+done):0;scenery_owed=0;scenery_line=uint16_t(done);
+  scenery_scan=(uint32_t)(uintptr_t)S.line_job;scenery_owed=uint16_t(done<224?done:224);scenery_line=0;
   __asm__ volatile("move.w %0,%%sr"::"d"(sr));
-  bool skipped=done>=SCENERY_LINES;for(unsigned l=0;l<done&&!skipped;l++)if(S.line_job[l])skipped=true;
-  // not when a job list of the old frame was still being written: its last run lands after this start state
-  if(skipped)++scenery_skipped_blanks;
-  vblank_state_ok=!skipped&&!scenery_unfinished;}
+  bool late=false;for(unsigned l=0;l<done&&l<224&&!late;l++)if(S.line_job[l])late=true;
+  if(late)++scenery_skipped_blanks;
+  vblank_state_ok=true;}
 #else
  scenery_scan=(uint32_t)(uintptr_t)S.line_job;
 #endif
@@ -1722,7 +1725,7 @@ void visuals_print(){
  report_printf("ASM CHECK tile_rows calls=%lu to_c=%lu mismatches=%lu finish calls=%lu mismatches=%lu split calls=%lu mismatches=%lu\n",(unsigned long)asm_check[0],(unsigned long)asm_check[1],(unsigned long)asm_check[2],(unsigned long)asm_check[3],(unsigned long)asm_check[4],(unsigned long)asm_check[5],(unsigned long)asm_check[6]);
 #endif
 #ifdef CBX68_TRACE
- report_printf("TRACE irqs/frame");for(unsigned k=0;k<16;k++)report_printf(" %lu",(unsigned long)irq_hist[k]);report_printf("\nTRACE jobs lag_max=%u late_lines=%lu missed_lists=%lu restarts=%lu skipped_blanks=%lu\n",(unsigned)scenery_owed_max,(unsigned long)scenery_late_lines,(unsigned long)scenery_missed,(unsigned long)scenery_restarts,(unsigned long)scenery_skipped_blanks);
+ report_printf("TRACE irqs/frame");for(unsigned k=0;k<16;k++)report_printf(" %lu",(unsigned long)irq_hist[k]);report_printf("\nTRACE jobs lag_max=%u late_lines=%lu missed_lists=%lu restarts=%lu late_blanks=%lu\n",(unsigned)scenery_owed_max,(unsigned long)scenery_late_lines,(unsigned long)scenery_missed,(unsigned long)scenery_restarts,(unsigned long)scenery_skipped_blanks);
  {FILE*tf=fopen("FRAMES.BIN","wb");if(tf){fwrite(frame_trace,12,frame_trace_n,tf);fclose(tf);}}
 #endif
  report_printf("R026 PHASES us capture=%lu colours=%lu tiles=%lu rest=%lu\n",(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_colour*50UL),(unsigned long)(scenery_fine_tiles*50UL),(unsigned long)((scenery_fine_total-scenery_fine_capture-scenery_fine_colour-scenery_fine_tiles)*50UL));
