@@ -1279,7 +1279,7 @@ static void build_scenery(SceneryPacket&S,const uint16_t*pal,CarPacket&car,const
 }
 // Raster/vblank side. scenery_scan points at the job pointer of the next raster interrupt.
 static uint32_t scenery_zero[SCENERY_LINES];
-extern "C" {volatile uint32_t scenery_scan=0;void scenery_vblank(const RoadRow*rows);}
+extern "C" {volatile uint32_t scenery_scan=0;volatile uint16_t scenery_owed=0,scenery_owed_max=0;volatile uint8_t scenery_busy=0,scenery_gen=0;void scenery_vblank(const RoadRow*rows);}
 static void scenery_run(const uint32_t*j){
  while(uint32_t dst=*j++){uint32_t n=*j++ +1;
 #ifdef OR_X68K
@@ -1313,7 +1313,7 @@ extern "C" void scenery_vblank(const RoadRow*rows){
  // continue at the line the raster interrupts have reached (line 0 unless the blank's work ran long)
  {uint16_t sr;__asm__ volatile("move.w %%sr,%0\n ori.w #0x0700,%%sr":"=d"(sr));
   const unsigned done=unsigned((const RoadRow*)road_scan-rows);
-  scenery_scan=done<SCENERY_LINES?(uint32_t)(uintptr_t)(S.line_job+done):0;
+  scenery_scan=done<SCENERY_LINES?(uint32_t)(uintptr_t)(S.line_job+done):0;scenery_owed=0;
   __asm__ volatile("move.w %0,%%sr"::"d"(sr));}
 #else
  scenery_scan=(uint32_t)(uintptr_t)S.line_job;
@@ -1657,7 +1657,7 @@ void visuals_print(){
  report_printf("ASM CHECK tile_rows calls=%lu to_c=%lu mismatches=%lu finish calls=%lu mismatches=%lu split calls=%lu mismatches=%lu\n",(unsigned long)asm_check[0],(unsigned long)asm_check[1],(unsigned long)asm_check[2],(unsigned long)asm_check[3],(unsigned long)asm_check[4],(unsigned long)asm_check[5],(unsigned long)asm_check[6]);
 #endif
 #ifdef CBX68_TRACE
- report_printf("TRACE irqs/frame");for(unsigned k=0;k<16;k++)report_printf(" %lu",(unsigned long)irq_hist[k]);report_printf("\n");
+ report_printf("TRACE irqs/frame");for(unsigned k=0;k<16;k++)report_printf(" %lu",(unsigned long)irq_hist[k]);report_printf(" lag_max=%u\n",(unsigned)scenery_owed_max);
  {FILE*tf=fopen("FRAMES.BIN","wb");if(tf){fwrite(frame_trace,12,frame_trace_n,tf);fclose(tf);}}
 #endif
  report_printf("R026 PHASES us capture=%lu colours=%lu tiles=%lu rest=%lu\n",(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_colour*50UL),(unsigned long)(scenery_fine_tiles*50UL),(unsigned long)((scenery_fine_total-scenery_fine_capture-scenery_fine_colour-scenery_fine_tiles)*50UL));
