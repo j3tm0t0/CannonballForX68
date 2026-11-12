@@ -845,9 +845,10 @@ struct SceneryJob{int16_t line;uint8_t pcg;uint8_t pad;uint16_t res,sprite;};
 extern "C" uint32_t scenery_tile_finish(uint16_t*src,uint32_t rowbits,const uint32_t*rowLR,uint32_t*enc);
 extern "C" void scenery_tile_split(uint16_t*src,uint32_t rowbits,uint32_t**encp);
 extern "C" uint32_t scenery_pcg_hash(const uint32_t*enc);
+extern "C" uint32_t scenery_tile_rows_learn(const uint16_t*src,unsigned rows,uint32_t*rowLR,const uint16_t*block_bit,uint8_t*met_q);
 extern "C" uint32_t scenery_tile_rows(const uint16_t*src,unsigned rows,uint32_t*rowLR,const uint16_t*block_bit);
 #ifdef CBX68_ASM_CHECK
-static uint32_t asm_check[7];   // rows: calls, colour lookups left to C, mismatches; finish: calls, mismatches
+static uint32_t asm_check[8];static uint8_t chk_met[256];   // rows: calls, colour lookups left to C, mismatches; finish: calls, mismatches
 #endif
 #endif
 static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,const HudPacket&hud,bool sprites_on){
@@ -996,6 +997,9 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // looked up in the same pixel order, and the patterns, hashes and sprite order are unchanged.
  static uint16_t block_bit[256];static bool block_bit_init=false;
  if(!block_bit_init){for(unsigned q=0;q<256;q++)block_bit[q]=uint16_t(q>=16?1u<<((q>>4)-1):0);block_bit_init=true;}
+#if defined(OR_X68K)&&defined(CBX68_ASM_CHECK)
+ const uint32_t chk_bails=asm_check[1];
+#endif
  if(!reuse)for(int ty=low/16;ty<(high+15)/16;ty++){
   const unsigned rows=unsigned(std::min(16,224-ty*16));
   for(uint32_t live=tile_live[ty];live;live&=live-1){const unsigned tx=unsigned(__builtin_ctz(live));
@@ -1006,9 +1010,10 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   bool rows_done=false;
 #ifdef CBX68_ASM_CHECK
   uint32_t chkLR[32];uint32_t chk=0xffffffffu;
-  if(!learn){chk=scenery_tile_rows(tile_src,rows,chkLR,block_bit);++asm_check[0];if(chk==0xffffffffu)++asm_check[1];}
+  // (learn frames: the asm marks met_q on a copy, compared with the C marks at the end of the frame)
+  {chk=learn?scenery_tile_rows_learn(tile_src,rows,chkLR,block_bit,chk_met):scenery_tile_rows(tile_src,rows,chkLR,block_bit);++asm_check[0];if(chk==0xffffffffu)++asm_check[1];}
 #else
-  if(!learn){const uint32_t rv=scenery_tile_rows(tile_src,rows,rowLR,block_bit);
+  {const uint32_t rv=learn?scenery_tile_rows_learn(tile_src,rows,rowLR,block_bit,met_q):scenery_tile_rows(tile_src,rows,rowLR,block_bit);
    if(rv!=0xffffffffu){mask=rv&0xffff;rowbits=rv>>16;rows_done=true;}}
 #endif
   if(!rows_done)
@@ -1104,6 +1109,11 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  }
  // learn which colours each bank uses (planned and met), then clear the tables
  for(unsigned k=0;k<nused;k++){unsigned idx=scenery_used[k],q=scenery_map[idx];if(learn&&q&&q!=255&&met_q[q])bank_seen_mask[idx>>4]|=uint16_t(1u<<(idx&15));scenery_map[idx]=0;}
+#if defined(OR_X68K)&&defined(CBX68_ASM_CHECK)
+ // asm marks must be C marks; with no tile handed back to C this frame they must be all of them
+ if(learn){bool bad=false;for(unsigned q=1;q<256;q++)if(chk_met[q]?!met_q[q]:(met_q[q]&&chk_bails==asm_check[1]))bad=true;
+  ++asm_check[7];if(bad)++asm_check[2];memset(chk_met,0,sizeof chk_met);}
+#endif
  if(learn)memset(met_q,0,sizeof met_q);
  for(unsigned k=0;k<nbank;k++)bank_block[bank_list[k]]=-1;
  for(unsigned b=0;b<S.blocks;b++)for(unsigned n=bcount[b]+1;n<16;n++)S.palette[b][n]=0;

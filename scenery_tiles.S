@@ -12,13 +12,19 @@
    nothing but rowLR has been written, and the caller runs the C loop for this tile. */
 .text
 .even
-.globl scenery_tile_rows
-scenery_tile_rows:
- movem.l %d2-%d7/%a2,-(%sp)
- move.l 32(%sp),%a0
- move.l 36(%sp),%d7
- move.l 40(%sp),%a1
- move.l 44(%sp),%a2
+/* LEARN=1 builds scenery_tile_rows_learn, which takes a fifth argument met_q (256 bytes)
+   and sets met_q[code] for every pixel of a row that has pixels (code 0 included: not read). */
+.macro TILE_ROWS name,learn
+.globl \name
+\name:
+ movem.l %d2-%d7/%a2-%a3,-(%sp)
+ move.l 36(%sp),%a0
+ move.l 40(%sp),%d7
+ move.l 44(%sp),%a1
+ move.l 48(%sp),%a2
+ .if \learn
+ move.l 52(%sp),%a3
+ .endif
  moveq #0,%d3            /* mask */
  moveq #0,%d5            /* rowbits */
  moveq #1,%d6            /* bit of this row */
@@ -47,6 +53,9 @@ scenery_tile_rows:
  .rept 8
  move.w (%a0)+,%d1
  or.w (%a2,%d1.l*2),%d3
+ .if \learn
+ st (%a3,%d1.l)
+ .endif
  lsl.l #4,%d4
  and.w %d2,%d1
  or.b %d1,%d4
@@ -56,6 +65,9 @@ scenery_tile_rows:
  .rept 8
  move.w (%a0)+,%d1
  or.w (%a2,%d1.l*2),%d3
+ .if \learn
+ st (%a3,%d1.l)
+ .endif
  lsl.l #4,%d4
  and.w %d2,%d1
  or.b %d1,%d4
@@ -69,12 +81,15 @@ scenery_tile_rows:
  swap %d5
  move.w %d3,%d5
  move.l %d5,%d0
- movem.l (%sp)+,%d2-%d7/%a2
+ movem.l (%sp)+,%d2-%d7/%a2-%a3
  rts
 9:
  moveq #-1,%d0
- movem.l (%sp)+,%d2-%d7/%a2
+ movem.l (%sp)+,%d2-%d7/%a2-%a3
  rts
+.endm
+TILE_ROWS scenery_tile_rows,0
+TILE_ROWS scenery_tile_rows_learn,1
 
 /* Finish a tile that has one palette block (68020+).
    uint32_t scenery_tile_finish(uint16_t* src, uint32_t rowbits, const uint32_t* rowLR, uint32_t* enc)
