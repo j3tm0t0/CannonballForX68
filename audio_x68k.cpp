@@ -93,7 +93,10 @@ void YM2151::write_reg(int r,int v){
 // mixed sum -> the ADPCM's 12 bits. 4: the PCM part then comes out as loud as the FM part, as it is
 // with Cannonball's own chip emulators for the same sound commands (XEiJ recordings: FM 1897, PCM
 // 1074 with a shift of 5; the emulators give 2066 and 2067).
-enum {PCM_SHIFT=4};
+// The PCM part is then taken down to 3/4 (PCM_GAIN, about -2.5 dB), so the music on the FM chip
+// stands out a little more against the engine and traffic noise: each channel's volume is
+// multiplied by 3 at mixing time and the sum shifted 2 more (no extra work per sample).
+enum {PCM_GAIN=3,PCM_SHIFT=4+2};
 static uint8_t*pcm_rom=0,*pcm_low=0,*pcm_regs=0;static uint32_t pcm_mask=0;   // the chip's ROM, per-channel address fraction, registers
 SegaPCM::SegaPCM(uint32_t,AssetLoader*asset_,uint8_t*ram_,int32_t){ram=ram_;low=new uint8_t[16];memset(low,0,16);pcm_asset=asset_?asset_->asset:0;max_addr=asset_?int32_t(asset_->length):0;bankshift=12;bankmask=0x70;rgnmask=max_addr-1;downsample=0;
  for(int i=0;i<0x100;i++)ram[i]=0xff;
@@ -171,7 +174,7 @@ static void pcm_mix_channels(uint8_t*ram,const uint8_t*rom,uint32_t rgnmask,uint
   uint32_t addr=(uint32_t(regs[0x85])<<16)|(uint32_t(regs[0x84])<<8)|low[ch];
   const uint32_t loop=(uint32_t(regs[0x05])<<16)|(uint32_t(regs[0x04])<<8);
   const uint8_t end=uint8_t(regs[0x06]+1);
-  const uint32_t vol=uint32_t(regs[2])+uint32_t(regs[3]),step=uint32_t(regs[7])*2;
+  const uint32_t vol=(uint32_t(regs[2])+uint32_t(regs[3]))*PCM_GAIN,step=uint32_t(regs[7])*2;
   unsigned i=0;
   while(i<n){
    unsigned run=1;
