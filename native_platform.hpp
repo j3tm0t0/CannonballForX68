@@ -18,7 +18,8 @@ RoadRow* volatile road_scan=0;
 volatile uint32_t road_vblanks=0,road_shown=0,road_irq_count=0;
 extern "C"{volatile uint8_t road_vblank_busy=0;volatile uint32_t road_vblank_overruns=0;}
 static uint32_t io_probe_ns[5],io_probe_n[5],pcg_long_ns=0;
-extern "C"{extern volatile uint8_t audio_hold;extern volatile uint32_t audio_ticks_done,audio_fm_writes,audio_fm_timeouts;extern uint8_t audio_enabled;extern uint16_t audio_ticks_per_blank;void audio_silence();void audio_start();}
+extern "C"{extern volatile uint8_t audio_hold;extern volatile uint32_t audio_ticks_done,audio_fm_writes,audio_fm_timeouts;extern uint8_t audio_enabled;extern uint16_t audio_ticks_per_blank;void audio_silence();void audio_start(int with_game);}
+static int native_audio_game=1;   // main.cpp: 0 for the display test (no ROMs, no sound program)
 #ifdef CBX68_PROF
 // sampling profiler (road_irq.S): hits per 16 bytes of text, last bucket = outside the program
 extern "C"{extern char _start[],_etext[];uint32_t prof_text_size=0;uint32_t prof_hist[(0x140000>>4)+1];}
@@ -106,7 +107,7 @@ static void platform_init(){
  HW16(0xe80012)=1023;HW16(0xe82400)=1;HW16(0xe82500)=0x06e4;HW16(0xe82600)=0x004f;
  for(unsigned a=0xe80014;a<=0xe80026;a+=2)HW16(a)=0;
  road_build(hwroad,display_palette,road_frames[0]);road_stream(road_frames[0]);road_active=road_frames[0].rows;
- audio_start();   // r031: FM chip (needs supervisor mode)
+ audio_start(native_audio_game);   // r031: FM chip (needs supervisor mode); not in the display test
  unsigned short sr=mask_irqs();
  saved_vblank=*(volatile uint32_t*)0x134;saved_raster=*(volatile uint32_t*)0x138;
  saved_iera=HW8(0xe88007);saved_imra=HW8(0xe88013);saved_aer=HW8(0xe88003);saved_tacr=HW8(0xe88019);saved_tadr=HW8(0xe8801f);

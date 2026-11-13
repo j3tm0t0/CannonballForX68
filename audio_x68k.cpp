@@ -16,7 +16,7 @@ extern OSound osound;
 extern "C" {
  volatile uint8_t audio_hold=1;          // 1 = the sound code must not run (start-up, OSoundInt::init)
  volatile uint8_t audio_super=0;         // 1 = supervisor mode, the chip may be written (set by audio_start)
- void audio_start();
+ void audio_start(int with_game);
  volatile uint32_t audio_ticks_done=0,audio_fm_writes=0,audio_fm_timeouts=0;
  uint8_t audio_enabled=1;                // NOSOUND argument: 0
  uint16_t audio_ticks_per_blank=2254;    // 125 Hz / 55.458 Hz, in 1/1000 (HZ60: 2083)
@@ -29,9 +29,24 @@ static void opm_wait(){
  unsigned n=0;while((*opm_data()&0x80)&&++n<2000){}
  if(n>=2000)++audio_fm_timeouts;
 }
+// Register select and data are written with interrupts masked: the system's own handlers (the
+// timer interrupt drives the FDD lines through register 0x1B) also select a register, and one of
+// them coming in between would send our data to its register. For 0x1B the system's copy of the
+// value (IOCS work 0x09DA) is read inside the same masked stretch.
 static void opm_write(unsigned r,unsigned v){
- opm_wait();*opm_reg()=uint8_t(r);
- opm_wait();*opm_data()=uint8_t(v);
+ // The wait for the busy flag is done with interrupts open (it can take 17 us, and the raster
+ // interrupts must stay on time); only the two writes are masked, after one more look at the flag.
+ for(unsigned tries=0;;tries++){
+  opm_wait();
+  uint16_t sr;__asm__ volatile("move.w %%sr,%0\n ori.w #0x0700,%%sr":"=d"(sr)::"memory");
+  if(!(*opm_data()&0x80)||tries>=8){
+   if(r==0x1b)v=(v&0x03)|(*(volatile uint8_t*)0x09daUL&0xc0);
+   *opm_reg()=uint8_t(r);
+   *opm_data()=uint8_t(v);
+   __asm__ volatile("move.w %0,%%sr"::"d"(sr):"memory");
+   break;}
+  __asm__ volatile("move.w %0,%%sr"::"d"(sr):"memory");
+ }
  ++audio_fm_writes;
 }
 // ---- YM2151: the real chip ----
@@ -47,8 +62,7 @@ void YM2151::write_reg(int r,int v){
  // vertical blank), so the timer control register is left alone
  if(r==0x14)return;
  // register 0x1B: bits 7 and 6 are the X68000's ADPCM clock select and FDD ready lines (CT1/CT2).
- // Keep what the system has set (IOCS work 0x09DA), take only the LFO waveform from the game.
- if(r==0x1b)v=(v&0x03)|(*(volatile uint8_t*)0x09daUL&0xc0);
+ // opm_write keeps what the system has set and takes only the LFO waveform from the game.
  opm_write(unsigned(r),unsigned(v));
 }
 // ---- Sega PCM: not there ----
@@ -68,8 +82,10 @@ int16_t* SoundChip::get_buffer(){return 0;}
 
 // Called once in supervisor mode before the interrupts are installed: the game was initialised in
 // user mode, where the chip cannot be written, so the sound code is initialised again here.
-void audio_start(){
+// with_game = 0 (the display test without ROMs): no sound, the sound program's ROM is not loaded.
+void audio_start(int with_game){
  audio_super=1;
+ if(!with_game)audio_enabled=0;
  if(!audio_enabled)return;
  osoundint.init();
 }

@@ -172,6 +172,7 @@ int main(int argc,char**argv) {
     timeline_open();
 #endif
 #ifdef OR_X68K
+ native_audio_game=cbx68_test?0:1;
  platform_init();
 #else
  visuals_native_init();

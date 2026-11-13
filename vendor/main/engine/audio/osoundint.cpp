@@ -21,8 +21,8 @@ OSound osound;
 // (Before the display is set up the program is still in user mode and the interrupt is not
 // installed: audio_super is 0 and nothing is masked.)
 extern "C" volatile uint8_t audio_hold,audio_super;
-#define CBX68_AUDIO_LOCK() uint16_t cbx68_sr=0;if(audio_super)__asm__ volatile("move.w %%sr,%0\n ori.w #0x0700,%%sr":"=d"(cbx68_sr))
-#define CBX68_AUDIO_UNLOCK() if(audio_super)__asm__ volatile("move.w %0,%%sr"::"d"(cbx68_sr))
+#define CBX68_AUDIO_LOCK() uint16_t cbx68_sr=0;if(audio_super)__asm__ volatile("move.w %%sr,%0\n ori.w #0x0700,%%sr":"=d"(cbx68_sr)::"memory")
+#define CBX68_AUDIO_UNLOCK() if(audio_super)__asm__ volatile("move.w %0,%%sr"::"d"(cbx68_sr):"memory")
 #else
 #define CBX68_AUDIO_LOCK()
 #define CBX68_AUDIO_UNLOCK()
