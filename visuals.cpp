@@ -825,12 +825,19 @@ static uint32_t scenery_car_dropped=0,scenery_shared_total=0,scenery_frames=0,sc
 static unsigned scenery_peak=0,scenery_line_peak=0,scenery_block_peak=0;
 static uint32_t scenery_reuse_frames=0;   // r030
 uint32_t scenery_fine_total=0,scenery_fine_capture=0,scenery_fine_max=0,scenery_fine_colour=0,scenery_fine_tiles=0;
-// 64: what one line period (63.5 us) takes. A long written to the PCG with the sprite display on
-// costs about 1.1 us (XEiJ, IOSPEED line of the report), and with 96 a quarter of the job lists
-// finished after their tile row had begun (16 MHz, start scene); with 64 none did.
-#ifndef CBX68_BUDGET
-#define CBX68_BUDGET 64
+// Longs a raster interrupt may write. One line period is 63.5 us and a long written to the PCG
+// with the sprite display on costs about 1.1 us on XEiJ (IOSPEED line of the report): with 96 a
+// quarter of the job lists finished after their tile row had begun (16 MHz, start scene), with
+// 64 none did. On the X68000 the start-up code measures the write time and sets the budget
+// (visuals_set_line_budget); -DCBX68_BUDGET=N fixes it.
+#ifdef CBX68_BUDGET
+static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;
+void visuals_set_line_budget(unsigned){}
+#else
+static unsigned SCENERY_LINE_BUDGET=64;
+void visuals_set_line_budget(unsigned longs){SCENERY_LINE_BUDGET=longs<38?38:longs>96?96:longs;}   // 38: one pattern and one sprite
 #endif
+unsigned visuals_line_budget(){return SCENERY_LINE_BUDGET;}
 #ifndef CBX68_REWRITTEN_FIRST
 #define CBX68_REWRITTEN_FIRST 1
 #endif
@@ -840,7 +847,6 @@ static const bool SCENERY_REWRITTEN_FIRST=CBX68_REWRITTEN_FIRST;
 #endif
 static const bool SCENERY_DIFF=CBX68_DIFF;   // a pattern rewritten by a line job: only the longs that differ from what it held
 static uint32_t scenery_start_longs=0,scenery_restart_longs=0,scenery_line_longs=0;   // job list sizes, summed over the frames
-static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;   // longs per raster interrupt
 #ifndef OR_X68K
 static unsigned scenery_entry_list[256],scenery_entry_count=0;
 static uint64_t scenery_dropped_pixels=0,scenery_pixels_total=0,scenery_shadow_pixels=0;
