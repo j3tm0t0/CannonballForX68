@@ -37,7 +37,7 @@
 #include "engine/oanimseq.hpp"
 
 // ---------------------------------------------------------------- globals normally in main.cpp
-namespace cannonball { Audio audio; int frame = 0; bool tick_frame = true; double frame_ms = 0; int fps_counter = 0; int state = 0; }
+namespace cannonball { Audio audio; int frame = 0; bool tick_frame = true; bool skip_render = false; double frame_ms = 0; int fps_counter = 0; int state = 0; }
 Config config;
 Input input;
 namespace forcefeedback { void set(int, int) {} }

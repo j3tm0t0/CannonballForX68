@@ -22,6 +22,8 @@
 #include "engine/otraffic.hpp"
 #include "engine/data/ozoom_lookup.hpp"
 
+namespace cannonball { extern bool skip_render; }   // Cannonball for x68, see main.hpp
+
 OSprites osprites;
 
 OSprites::OSprites(void)
@@ -142,8 +144,12 @@ void OSprites::update_sprites()
 	{
         do_sprite_swap = false;
         video.sprite_layer->swap();
-        copy_palette_data();
 	}
+    if (do_palette_copy)
+    {
+        do_palette_copy = false;
+        copy_palette_data();
+    }
 }
 
 // Disable All Sprite Entries
@@ -507,13 +513,18 @@ void OSprites::finalise_sprites()
     sprite_entries[sprite_count].data[1] = 0xFFFF;
 
     // TODO: Code to wait for interrupt goes here
-    blit_sprites();
+    // Cannonball for x68: no copy to the sprite RAM and no exchange of its halves for a step whose
+    // picture is not drawn.
+    if (!cannonball::skip_render)
+        blit_sprites();
     otraffic.traffic_logic();
     otraffic.traffic_sound();
     spr_cnt_main = spr_cnt_shadow = 0;
 
     // Ready to swap buffer and blit
-    do_sprite_swap = true;
+    if (!cannonball::skip_render)
+        do_sprite_swap = true;
+    do_palette_copy = true;
 }
 
 // Copy Sprite Data to Sprite RAM 

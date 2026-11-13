@@ -30,6 +30,8 @@
 #include "engine/oroad.hpp"
 #include "engine/ostats.hpp"
 
+namespace cannonball { extern bool skip_render; }   // Cannonball for x68, see main.hpp
+
 ORoad oroad;
 
 ORoad::ORoad(void)
@@ -198,6 +200,13 @@ void ORoad::do_road()
     set_road_y();
     set_horizon_y();
     do_road_data();
+
+    // Cannonball for x68: the rest only fills the road RAM that the picture is made from. When
+    // this step's picture is not drawn it is left out, and the halves are not exchanged, so the
+    // shown half stays the one of the last picture.
+    if (cannonball::skip_render)
+        return;
+
     blit_roads();
     output_hscroll(&road0_h[0], HW_HSCROLL_TABLE0);
     output_hscroll(&road1_h[0], HW_HSCROLL_TABLE1);
