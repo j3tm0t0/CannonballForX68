@@ -22,6 +22,30 @@ extern "C"{extern volatile uint8_t audio_hold;extern volatile uint32_t audio_tic
 #ifdef CBX68_AUDIO_LOG
 extern "C"{extern uint32_t audio_log[];extern volatile uint32_t audio_log_n;}
 #endif
+// MPU caches (main.cpp calls native_cache_on at the start, platform_exit puts the CACR back).
+// MPU type from the IOCS work byte 0x0CBC (3 = 68030, 4 = 68040, 6 = 68060).
+static unsigned native_mpu=0;static uint32_t native_cacr_before=0;static bool native_cacr_set=false;
+static void native_cache_on(){
+ const int ssp=_iocs_b_super(0);
+ native_mpu=*(volatile uint8_t*)0x0cbcUL;
+ if(native_mpu>=3){
+  uint32_t c;__asm__ volatile("movec %%cacr,%0":"=d"(c));native_cacr_before=c;
+  uint32_t want=c;
+  if(native_mpu==3){if((c&0x0101)!=0x0101)want=c|0x0101|0x0808;}                       // EI, ED, with both caches cleared
+  else if(native_mpu==4){if((c&0x80008000u)!=0x80008000u)want=c|0x80008000u;}             // EDC, EIC
+  else{if((c&0x80008000u)!=0x80008000u)want=c|0x80008000u|0x20000000u|0x00800000u|0x00400000u;}   // 68060: EDC, EIC, store buffer, branch cache (cleared)
+  if(want!=c){
+   if(native_mpu>=4)__asm__ volatile("cinva %%bc":::"memory");   // nothing valid in them yet
+   __asm__ volatile("movec %0,%%cacr"::"d"(want):"memory");native_cacr_set=true;}
+ }
+ if(ssp>0)_iocs_b_super(ssp);
+}
+static void native_cache_restore(){
+ if(!native_cacr_set)return;
+ uint32_t c=native_cacr_before;
+ if(native_mpu>=4)__asm__ volatile("cpusha %%bc":::"memory");   // write back what the data cache holds
+ __asm__ volatile("movec %0,%%cacr"::"d"(c):"memory");native_cacr_set=false;
+}
 static int native_audio_game=1;   // main.cpp: 0 for the display test (no ROMs, no sound program)
 #ifdef CBX68_PROF
 // sampling profiler (road_irq.S): hits per 16 bytes of text, last bucket = outside the program
@@ -217,6 +241,7 @@ static void platform_exit(){
  for(unsigned i=0;i<16384;i++)HW16(0xeb8000UL+i*2)=0;
  // r027b: the score etc. use all 4 text planes; the console clears only its own
  for(unsigned p=0;p<4;p++)for(unsigned i=0;i<512*64;i++)HW16(0xe00000UL+p*0x20000UL+i*2)=0;
+ native_cache_restore();
  restore_irqs(sr);_iocs_crtmod(native_old_mode);_iocs_sp_off();_iocs_b_curon();for(unsigned i=0;i<16;i++)HW16(0xe82200UL+i*2)=saved_text_palette[i];_iocs_b_clr_al();_iocs_b_locate(0,0);if(native_ssp>0)_iocs_b_super(native_ssp);
  report_pager_start();   // r028: stop at each full screen
 
