@@ -190,13 +190,16 @@ void road_build(const HWRoad&r,const uint16_t*pal,RoadFrame&f){
   f.mode[y]=mode;
  }
  // A row that has a BG plane off (road_enable bit 0: BG0, bit 3: BG1) shows nothing of that
- // plane, whatever its scroll register holds. Such a row takes the scroll value of the row
- // above, so the raster interrupt does not write the register on that line (row_changed): most
- // rows show the road from the graphic page with both planes off. A later row that turns the
- // plane on carries its own value, which is written on that row as before.
- for(unsigned y=1;y<224;y++){RoadRow&row=f.rows[y];const RoadRow&up=f.rows[y-1];
-  if(!(row.road_enable&1))row.bg0=up.bg0;
-  if(!(row.road_enable&8))row.bg1=up.bg1;}
+ // plane, whatever its scroll register holds. When the row above has the plane off as well, the
+ // row takes that row's scroll value, so the raster interrupt does not write the register on
+ // that line (row_changed): most rows show the road from the graphic page with both planes off.
+ // The first row with a plane off keeps its own value: the interrupt writes the scroll before
+ // the control register, the line is already being shown by then, and until the control
+ // register is written the plane still shows, with the scroll just written (XEiJ: the first 48
+ // pixels of that line). A later row that turns the plane on carries its own value, as before.
+ for(unsigned y=1;y<224;y++){RoadRow&row=f.rows[y];const RoadRow&up=f.rows[y-1];   // (downwards: a run of rows takes the value of its first row)
+  if(!(row.road_enable&1)&&!(up.road_enable&1))row.bg0=up.bg0;
+  if(!(row.road_enable&8)&&!(up.road_enable&8))row.bg1=up.bg1;}
 }
 // After everything that changes the rows (road_build, visuals_build): see RoadFrame::row_changed.
 void road_rows_changed(RoadFrame&f){
