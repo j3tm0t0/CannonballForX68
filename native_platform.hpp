@@ -160,7 +160,7 @@ static void platform_init(){
 }
 // Picture skipping: the game does one step a screen refresh (VSYNC pace). When drawing has put
 // it 2 or more refreshes behind, the next picture is left out (the step itself still runs), at
-// most 5 in a row so the screen keeps changing. Far behind (a long pause), the count starts again.
+// most 27 in a row so the screen still changes once a second. Far behind (a long pause), the count starts again.
 static int native_skip_mode=-1,native_lag=0;static uint32_t native_skipped_draws=0;
 static bool platform_draw_due(int frame){
  static uint32_t v0=0;static int f0=0;static bool started=false;static unsigned row=0;
@@ -169,7 +169,7 @@ static bool platform_draw_due(int frame){
  const int lag=int(v-v0)-(frame-f0);native_lag=lag;
  if(lag>60||lag<-60){v0=v;f0=frame;row=0;native_lag=0;return true;}
  if(lag<0){v0=v;f0=frame;native_lag=0;}                    // ahead (platform_sync waits): no credit is saved
- if(lag>=2&&row<5){++row;++native_skipped_draws;return false;}
+ if(lag>=2&&row<27){++row;++native_skipped_draws;return false;}   // (27: at least one picture a second)
  row=0;return true;
 }
 static void platform_sync(int frame){
