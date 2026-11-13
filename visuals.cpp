@@ -841,9 +841,8 @@ static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;
 void visuals_set_line_budget(unsigned){}
 #else
 static unsigned SCENERY_LINE_BUDGET=64;
-// 38: one pattern and one sprite. 67: never two whole patterns (68 longs) in one line: that alone is
-// more than a line period at the 0.93 us a long the sprite controller takes on XEiJ whatever the CPU.
-void visuals_set_line_budget(unsigned longs){SCENERY_LINE_BUDGET=longs<38?38:longs>67?67:longs;}
+// 16 to 67 (67: never two whole patterns, 68 longs, charged to one line).
+void visuals_set_line_budget(unsigned longs){SCENERY_LINE_BUDGET=longs<16?16:longs>67?67:longs;}
 #endif
 unsigned visuals_line_budget(){return SCENERY_LINE_BUDGET;}
 #ifndef CBX68_REWRITTEN_FIRST
@@ -1291,14 +1290,31 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // rewritten in this frame, [1] those still holding their start state. [0] is asked first, so the
  // rewriting stays on few patterns and the others need no reload when the frame is shown again.
  static uint16_t pq[2][512];static int8_t pq_last[2][512];unsigned pq_h[2]={0,0},pq_t[2]={0,0};
- int room4=0,room34=0;
+ int room=0;   // every line before it is full
  static uint16_t line_load[SCENERY_LINES];memset(line_load,0,sizeof line_load);
  static uint8_t s_rewritten[128],p_rewritten[256];memset(s_rewritten,0,sizeof s_rewritten);memset(p_rewritten,0,sizeof p_rewritten);   // has a line job
  // r027: text palette of each score/time band after the first, in the empty text row above it
  static int16_t hud_line[28];
  for(unsigned b=1;b<hud.bands;b++){hud_line[b]=int16_t(hud.band_first[b]*8-4);line_load[hud_line[b]]+=10;}
- auto find_line=[&](int from,int z,unsigned need,int&ptr)->int{int l=std::max(from,ptr);const bool at=l==ptr;
-  for(;l<=z;l++){if(line_load[l]+need<=SCENERY_LINE_BUDGET)return l;if(at)ptr=l+1;}return -1;};
+ // r031g: a job starts at the first line from `from` that has room and may run on into the lines
+ // after it (the raster interrupts of those lines come in while it is written, and their own jobs
+ // wait). It is charged to those lines up to the budget each, and must be done by line z. So the
+ // budget is what one line period can take on average, and a job longer than that (a whole
+ // pattern on a slow bus) still gets placed. Returns the start line, or -1; what was charged is
+ // kept in place_l/place_n for place_undo().
+ static int16_t place_l[SCENERY_LINES];static uint8_t place_n[SCENERY_LINES];unsigned place_count=0;
+ auto place=[&](int from,int z,unsigned need)->int{
+  int l=std::max(from,room);
+  while(l<=z&&line_load[l]>=SCENERY_LINE_BUDGET){if(l==room)room=l+1;++l;}
+  if(l>z)return -1;
+  unsigned room_sum=0;for(int k=l;k<=z&&room_sum<need;k++)if(line_load[k]<SCENERY_LINE_BUDGET)room_sum+=SCENERY_LINE_BUDGET-line_load[k];
+  if(room_sum<need)return -1;
+  place_count=0;unsigned rem=need;
+  for(int k=l;rem;k++){if(line_load[k]>=SCENERY_LINE_BUDGET)continue;
+   const unsigned f=std::min<unsigned>(SCENERY_LINE_BUDGET-line_load[k],rem);
+   line_load[k]=uint16_t(line_load[k]+f);rem-=f;place_l[place_count]=int16_t(k);place_n[place_count++]=uint8_t(f);}
+  return l;};
+ auto place_undo=[&](const int16_t*pl,const uint8_t*pn,unsigned count){for(unsigned k=0;k<count;k++){line_load[pl[k]]=uint16_t(line_load[pl[k]]-pn[k]);if(pl[k]<room)room=pl[k];}};
  static SceneryJob jobs[2*(SCENERY_MAX+128)];unsigned njobs=0;
  static uint16_t p_of[SCENERY_MAX+128];
  // users: car tiles (index SCENERY_MAX+i) and roadside sprites, row by row, car first
@@ -1395,14 +1411,15 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   auto drop=[&]{if(is_car){++S.car_dropped;car.registers[u-SCENERY_MAX][3]=0;}else ++S.dropped;};
   if((!is_car&&sn<0)||(pn<0&&cand[0]<0&&cand[1]<0)){drop();continue;}
   int ls=-1,lp=-1,from_q=-1;const int z=16*r-3;
-  if(sre){ls=find_line(16*(s_last[sn]+1)+3,z,4,room4);if(ls<0){drop();continue;}line_load[ls]+=4;}
+  int16_t s_pl[4];uint8_t s_pn[4];unsigned s_count=0;   // what the sprite's 4 longs were charged to
+  if(sre){ls=place(16*(s_last[sn]+1)+3,z,4);if(ls<0){drop();continue;}
+   s_count=place_count;for(unsigned k=0;k<s_count;k++){s_pl[k]=place_l[k];s_pn[k]=place_n[k];}}
   if(pn<0){
    for(unsigned q=0;q<2&&pn<0;q++){if(cand[q]<0)continue;
     diff_cost=34;const uint32_t m=SCENERY_DIFF?diff_mask(pcg_of(unsigned(p_content[cand[q]])),mine):0xffffffffu;const unsigned need=diff_cost;
-    int no_ptr=0;lp=find_line(16*(p_last[cand[q]]+1)+3,z,need,need>=34?room34:no_ptr);
+    lp=place(16*(p_last[cand[q]]+1)+3,z,need);
     if(lp>=0){pn=cand[q];pre=true;from_q=int(q);pmask=m;pneed=need;}}
-   if(pn<0){if(sre)line_load[ls]-=4;drop();continue;}
-   line_load[lp]+=pneed;
+   if(pn<0){if(sre)place_undo(s_pl,s_pn,s_count);drop();continue;}
   }
   if(sre||pre){++S.reused;if(sre)s_rewritten[sn]=1;if(pre)p_rewritten[pn]=1;}
   if(!shared&&!pre)fresh_p=std::max(fresh_p,unsigned(pn)+1);
