@@ -198,8 +198,10 @@ static void platform_init(){
 #endif
 static const bool SKIP_RENDER_PREP=CBX68_SKIP_RENDER_PREP;   // r031m: a step whose picture is skipped leaves out what only the picture needs
 static int native_skip_mode=-1,native_lag=0;static uint32_t native_skipped_draws=0;
+// (the schedule: frame f0 belongs at screen refresh v0, and every frame after it one refresh later)
+static uint32_t native_skip_v0=0;static int native_skip_f0=0;static bool native_skip_started=false;
 static bool platform_draw_due(int frame){
- static uint32_t v0=0;static int f0=0;static bool started=false;static unsigned row=0;
+ uint32_t&v0=native_skip_v0;int&f0=native_skip_f0;bool&started=native_skip_started;static unsigned row=0;
  const uint32_t v=road_vblanks;
  if(!started){v0=v;f0=frame;started=true;}
  const int lag=int(v-v0)-(frame-f0);native_lag=lag;
@@ -216,7 +218,15 @@ static void platform_sync(int frame){
  if(native_vsync_pace){   // r029: count screen refreshes instead of the clock
   static uint32_t vdeadline=0;static bool vprevious30=true;static bool vstarted=false;
   const uint32_t v=road_vblanks;
-  if(native_skip_mode>0&&native_lag>0){vstarted=false;return;}   // behind: no waiting, the game catches up
+  // r031o: with picture skipping, wait only until the refresh this frame ends at on the schedule
+  // of platform_draw_due. (Before: after a step that was behind, the next wait was 2 whole
+  // refreshes counted from the end of the step, so the time the step itself took was lost again.)
+  if(native_skip_mode>0&&native_skip_started){
+   // (platform_draw_due is asked about frame+2 next, the picture of the next game step)
+   const uint32_t until=native_skip_v0+uint32_t(frame+2-native_skip_f0);
+   while(int32_t(road_vblanks-until)<0){native_idle_waits++;__asm__ volatile("stop #0x2000":::"memory");}
+   vstarted=false;return;
+  }
   if(!vstarted||vprevious30!=mode30){vdeadline=v;vprevious30=mode30;vstarted=true;}
   vdeadline+=mode30?2:1;
   {unsigned m=native_measuring_visual;if(fine_draw_work>fine_work_max[m])fine_work_max[m]=fine_draw_work;fine_draw_work=0;
