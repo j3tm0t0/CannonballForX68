@@ -130,16 +130,10 @@ void hwsprites::write(const uint16_t adr, const uint16_t data)
 // Copy back buffer to main ram, ready for blit
 void hwsprites::swap()
 {
-    uint16_t *src = (uint16_t *)ram;
-    uint16_t *dst = (uint16_t *)ramBuff;
-
-    // swap the halves of the road RAM
-    for (uint16_t i = 0; i < SPRITE_RAM_SIZE; i++)
-    {
-        uint16_t temp = *src;
-        *src++ = *dst;
-        *dst++ = temp;
-    }
+    // swap the halves of the sprite RAM (Cannonball for x68: by their pointers)
+    uint16_t* temp = ram;
+    ram = ramBuff;
+    ramBuff = temp;
 }
 
 #include "../../../sprite_fast.hpp"

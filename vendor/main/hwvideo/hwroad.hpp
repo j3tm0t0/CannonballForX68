@@ -31,8 +31,11 @@ public:
     uint8_t roads[0x40200];
 
     // Two halves of RAM
-    uint16_t ram[ROAD_RAM_SIZE / 2];
-    uint16_t ramBuff[ROAD_RAM_SIZE / 2];
+    // Cannonball for x68: the two halves are exchanged by exchanging the pointers (read_road_control),
+    // not by copying 4 KB each way on every game step.
+    uint16_t ramStore[2][ROAD_RAM_SIZE / 2];
+    uint16_t* ram = ramStore[0];
+    uint16_t* ramBuff = ramStore[1];
 
     void decode_road(const uint8_t*);
     void render_background_lores(uint16_t*);
