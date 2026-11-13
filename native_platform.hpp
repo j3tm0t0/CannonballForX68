@@ -8,6 +8,11 @@
 #include "report_pager.hpp"
 #include "road_bridge.hpp"
 #include "visuals.hpp"
+#include "x68k_sysstat.hpp"
+#include <x68k/dos.h>
+#include <cstring>
+#include <cstdlib>
+extern "C"{extern uint8_t audio_pcm_place;}
 #define HW16(a) (*(volatile uint16_t*)(a))
 #define HW8(a) (*(volatile uint8_t*)(a))
 extern "C" {
@@ -30,6 +35,29 @@ extern "C"{extern uint32_t audio_log[];extern volatile uint32_t audio_log_n;}
 // from d2; d1=3 is not the state but "push and invalidate"), which the X68030 ROM and the 68060 accelerator's driver provide. Without them the call
 // fails and nothing is touched: turning the caches on in the CACR by hand would also cache the I/O
 // area when nobody has set the MMU or the transparent translation registers up for it.
+// r031n: on a 060turbo the program runs faster in the board's local memory than in the machine's
+// main memory (a cache miss is filled about 3 times faster there). With 060turbo.sys loaded and
+// the program in main memory, it ends itself and is run again in local memory (IOCS _SYS_STAT
+// $5001; main memory is used again when local memory is short). The word MAIN is added to the
+// arguments of the second run so that it is not tried twice; MAIN typed by hand keeps the program
+// in main memory. Must be called before anything is set up: the first run ends inside the call.
+static void native_run_in_local_memory(){
+ if(!x68k_has_060turbo()||x68k_sys_stat(0x4000)<=0)return;
+ // Only in 060turbo.sys's extended mode (its -xm option): there Human68k's memory reaches into
+ // local memory. In the compatible mode a program cannot be loaded there.
+ if(!x68k_extended_mode())return;
+ if(x68k_in_local_memory(reinterpret_cast<const void*>(&native_run_in_local_memory)))return;
+ const struct dos_psp*const psp=_dos_getpdb();
+ const unsigned char*const line=reinterpret_cast<const unsigned char*>(psp->comline);
+ const unsigned len=line[0];if(len>240)return;
+ static char path[96];static unsigned char again[8+1+255+1];
+ unsigned n=0;for(unsigned k=0;k<68&&psp->exe_path[k];k++)path[n++]=psp->exe_path[k];
+ for(unsigned k=0;k<24&&psp->exe_name[k];k++)path[n++]=psp->exe_name[k];
+ path[n]=0;
+ memcpy(again,line-8,8);                                  // (the 8 bytes before the line say how it is coded)
+ again[8]=uint8_t(len+5);memcpy(again+9,line+1,len);memcpy(again+9+len," MAIN",5);again[9+len+5]=0;
+ x68k_sys_stat(0x5001,1,path,again+8,0);                  // does not come back when it works
+}
 static int native_cache_before=-1;static bool native_cache_set=false,native_cache_was_set=false;
 static long native_sys_stat(long mode,long value){
  register long d0 __asm__("d0")=0xac;register long d1 __asm__("d1")=mode;register long d2 __asm__("d2")=value;
@@ -248,6 +276,8 @@ static void platform_exit(){
  for(unsigned p=0;p<4;p++)for(unsigned i=0;i<512*64;i++)HW16(0xe00000UL+p*0x20000UL+i*2)=0;
  native_cache_restore();
  restore_irqs(sr);_iocs_crtmod(native_old_mode);_iocs_sp_off();_iocs_b_curon();for(unsigned i=0;i<16;i++)HW16(0xe82200UL+i*2)=saved_text_palette[i];_iocs_b_clr_al();_iocs_b_locate(0,0);if(native_ssp>0)_iocs_b_super(native_ssp);
+ // (written before the pages of figures: the measuring scripts wait for this file, then press keys)
+ FILE*f=fopen("ROADPERF.TXT","w");if(f){fprintf(f,"visual_mode=%u\nbackground_columns=%lu\ncar_frames=%lu\ncar_text_frames=%lu\nmax_sprites=%u\nmax_patterns=%u\nmax_line=%u\noverflow=%lu\n",visual_mode,(unsigned long)background_columns,(unsigned long)car_frames,(unsigned long)car_text_frames,car_peak_tiles,car_peak_patterns,car_peak_line,(unsigned long)car_overflows);fprintf(f,"submitted=%lu shown=%lu cs=%lu\nlogic_cs=%lu table_cs=%lu publish_cs=%lu wait_cs=%lu\nvblanks=%lu raster_irqs=%lu\n",(unsigned long)native_frames,(unsigned long)road_shown,(unsigned long)t,(unsigned long)native_phase_cs[0],(unsigned long)native_phase_cs[1],(unsigned long)native_phase_cs[2],(unsigned long)native_phase_cs[3],(unsigned long)road_vblanks,(unsigned long)road_irq_count);fclose(f);}
  report_pager_start();   // r028: stop at each full screen
 
  const char* labels[]={"ROAD","BG","CAR","BOTH"};
@@ -268,6 +298,11 @@ static void platform_exit(){
  report_printf("bg_columns=%lu car_frames=%lu car_tiles=%lu max_tiles=%u max_patterns=%u max_line=%u overflow=%lu\n",(unsigned long)background_columns,(unsigned long)car_frames,(unsigned long)car_tiles_total,car_peak_tiles,car_peak_patterns,car_peak_line,(unsigned long)car_overflows);
  report_printf("car_text_frames=%lu\n",(unsigned long)car_text_frames);
  report_printf("shown_x1000=%lu\n",t?road_shown*100000UL/t:0);
+ {int on_stack=0;static int in_data=1;void*const heap=malloc(16);
+  const auto where=[](const void*p){return x68k_in_local_memory(p)?"LOCAL":"MAIN";};
+  report_printf("MEMORY 060turbo.sys=%d mode=%s code=%s data=%s heap=%s stack=%s pcm=%s cpu_bits=%ld\n",int(x68k_has_060turbo()),!x68k_has_060turbo()?"-":x68k_extended_mode()?"extended":"compatible",
+   where(reinterpret_cast<const void*>(&native_run_in_local_memory)),where(&in_data),where(heap),where(&on_stack),audio_pcm_place==1?"MAIN(taken)":audio_pcm_place==2?"none":"in program",x68k_has_060turbo()?x68k_sys_stat(0xc006):-1L);
+  free(heap);}
  report_printf("MPU cache at start=%d%s (-1: no cache control in this system, 3: both on)\n",native_cache_before,native_cache_was_set?", turned on by this program":"");
  report_printf("IOSPEED ns/long ram=%lu pcg=%lu bg=%lu pal=%lu crtc=%lu\n",(unsigned long)io_probe_ns[0],(unsigned long)io_probe_ns[1],(unsigned long)io_probe_ns[2],(unsigned long)io_probe_ns[3],(unsigned long)io_probe_ns[4]);
  report_printf("LINE BUDGET longs=%u (pcg ns/long at start=%lu) scenery=%s\n",visuals_line_budget(),(unsigned long)pcg_long_ns,visuals_light()?"LIGHT":"FULL");
@@ -288,5 +323,4 @@ static void platform_exit(){
 #ifdef CBX68_PROF
  {FILE*pf=fopen("PROF.BIN","wb");if(pf){fwrite(&prof_text_size,4,1,pf);fwrite(prof_hist,4,(prof_text_size>>4)+1,pf);fclose(pf);}}
 #endif
- FILE*f=fopen("ROADPERF.TXT","w");if(f){fprintf(f,"visual_mode=%u\nbackground_columns=%lu\ncar_frames=%lu\ncar_text_frames=%lu\nmax_sprites=%u\nmax_patterns=%u\nmax_line=%u\noverflow=%lu\n",visual_mode,(unsigned long)background_columns,(unsigned long)car_frames,(unsigned long)car_text_frames,car_peak_tiles,car_peak_patterns,car_peak_line,(unsigned long)car_overflows);fprintf(f,"submitted=%lu shown=%lu cs=%lu\nlogic_cs=%lu table_cs=%lu publish_cs=%lu wait_cs=%lu\nvblanks=%lu raster_irqs=%lu\n",(unsigned long)native_frames,(unsigned long)road_shown,(unsigned long)t,(unsigned long)native_phase_cs[0],(unsigned long)native_phase_cs[1],(unsigned long)native_phase_cs[2],(unsigned long)native_phase_cs[3],(unsigned long)road_vblanks,(unsigned long)road_irq_count);fclose(f);}
 }
