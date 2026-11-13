@@ -16,6 +16,7 @@ echo visuals.cpp >> build/sources_x68k.txt
 echo road_bridge.cpp >> build/sources_x68k.txt
 echo road_irq.S >> build/sources_x68k.txt
 echo scenery_tiles.S >> build/sources_x68k.txt
+echo pcm_mix.S >> build/sources_x68k.txt
 echo draw_profile.cpp >> build/sources_x68k.txt
 # r031: the sound code of Cannonball with the X68000's FM chip (audio_x68k.cpp) instead of audio_silent.cpp
 echo vendor/main/engine/audio/osound.cpp >> build/sources_x68k.txt
