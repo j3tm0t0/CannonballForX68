@@ -9,24 +9,48 @@ road_vblank_irq:
  /* Preserve every data/address register across the C callback and its helpers. */
  movem.l %d0-%d7/%a0-%a6,-(%sp)
  addq.l #1,road_vblanks
- move.l road_pending,%d0
+ /* The raster interrupts of this frame are armed first, and the work of the vertical blank
+    (commit, sprite start state) then runs with them enabled: when that work takes longer than
+    the blank, the top lines get their raster data late instead of the whole frame losing it. */
+ tst.b road_vblank_busy
+ beq 3f
+ /* the previous blank's work is still running: only restart the raster lines */
+ addq.l #1,road_vblank_overruns
+ clr.l scenery_scan
+ clr.w scenery_owed
+ addq.b #1,scenery_gen
+ move.l road_active,road_scan
+ move.w #72,0xe80012
+ bclr #5,0xe8800f
+ movem.l (%sp)+,%d0-%d7/%a0-%a6
+ rte
+3:
+ st road_vblank_busy
+ move.l road_pending,%d7
  beq 1f
- move.l %d0,-(%sp)
- jsr visuals_native_commit
- addq.l #4,%sp
- move.l road_pending,%d0
- move.l %d0,road_active
+ move.l %d7,road_active
  clr.l road_pending
  addq.l #1,road_shown
 1:
+ clr.l scenery_scan            /* no line jobs until scenery_vblank has loaded the start state */
+ clr.w scenery_owed
+ addq.b #1,scenery_gen           /* a job list of the old frame that is still being written stops */
+ move.l road_active,road_scan
+ move.w #72,0xe80012
+ bclr #5,0xe8800f
+ move.w #0x2500,%sr
+ tst.l %d7
+ beq 2f
+ move.l %d7,-(%sp)
+ jsr visuals_native_commit
+ addq.l #4,%sp
+2:
  /* r026: scenery sprites of the shown frame: load the frame-start state, point at its line jobs */
  move.l road_active,-(%sp)
  jsr scenery_vblank
  addq.l #4,%sp
- move.l road_active,%a0
- move.l %a0,road_scan
- move.w #72,0xe80012
- bclr #5,0xe8800f
+ move.w #0x2600,%sr
+ sf road_vblank_busy
  movem.l (%sp)+,%d0-%d7/%a0-%a6
  rte
 road_raster_irq:
@@ -65,18 +89,46 @@ road_raster_irq:
  move.w (%a0)+,0xeb0808
  move.w (%a0)+,0xe80012
  move.l %a0,road_scan
- /* r026: scenery sprite jobs of this line: {address, longs-1, data...} ... 0 */
+ /* End of service here: the scenery jobs below run with the interrupt mask at 5, so the next
+    raster interrupt (and the other MFP interrupts) can come in while they are written. The
+    road registers and R09 of every line are then written on time whatever the jobs take. */
+ bclr #6,0xe8800f
+ /* r026: scenery sprite jobs of this line: {address, longs-1, data...} ... 0.
+    A line whose interrupt arrives while earlier jobs are still being written is only counted
+    (scenery_owed); the loop that is running takes it afterwards. */
  tst.l scenery_scan
  beq 2f
- move.l scenery_scan,%a0
+ addq.w #1,scenery_owed
+#ifdef CBX68_TRACE
+ move.w scenery_owed,%a0
+ cmp.w scenery_owed_max,%a0
+ bls 8f
+ move.w %a0,scenery_owed_max
+8:
+#endif
+ tst.b scenery_busy
+ bne 2f
+ st scenery_busy
+ movem.l %d0-%d2/%a1-%a2,-(%sp)
+3:
+ /* mask 6 here */
+ tst.w scenery_owed
+ beq 9f
+ subq.w #1,scenery_owed
+ move.l scenery_scan,%d0
+ beq 9f
+ move.l %d0,%a0
  addq.l #4,scenery_scan
- tst.l (%a0)
- beq 2f
- movem.l %d0-%d1/%a1-%a2,-(%sp)
- move.l (%a0),%a1
+ move.l (%a0),%d0
+ beq 3b
+ move.l %d0,%a1
+ move.b scenery_gen,%d2
+ move.w #0x2500,%sr
 4:
  move.l (%a1)+,%d0
  beq 5f
+ cmp.b scenery_gen,%d2          /* a vertical blank came in: the rest belongs to the old frame */
+ bne 5f
  move.l %d0,%a2
  move.l (%a1)+,%d1
 6:
@@ -84,8 +136,11 @@ road_raster_irq:
  dbra %d1,6b
  bra 4b
 5:
- movem.l (%sp)+,%d0-%d1/%a1-%a2
+ move.w #0x2600,%sr
+ bra 3b
+9:
+ sf scenery_busy
+ movem.l (%sp)+,%d0-%d2/%a1-%a2
 2:
- bclr #6,0xe8800f
  move.l (%sp)+,%a0
  rte
