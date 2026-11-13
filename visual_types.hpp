@@ -20,6 +20,7 @@ struct SceneryPacket {
  uint16_t count,kept,dropped,blocks,first_block,dropped_banks,reused,line_longs_max,shared,car_dropped;
  uint16_t palette[13][16];
  uint32_t start_job,restart_job,line_job[SCENERY_LINES];   // restart_job: the part of start_job a pass of the line jobs has overwritten
+ uint32_t delta_job,seq;   // r032: start_job less the pattern longs the frame built before this one (seq-1) leaves in place; 0 = none
  uint32_t jobs[SCENERY_JOB_LONGS];
  ScenerySprite sprite[SCENERY_MAX];
  uint32_t pcg[SCENERY_MAX][32];   // r026c: 8 pixels a long, first pixel in the top nibble (PCG byte order)
