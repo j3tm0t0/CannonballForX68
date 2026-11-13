@@ -341,6 +341,7 @@ int main(int argc,char**argv) {
 #endif
 #ifdef OR_X68K
             native_phase_record(1,phase_start);phase_start=native_clock();
+            road_rows_changed(road_frame);   // r031f: the raster interrupt writes only what differs from the line before
             platform_road_submit(road_frame);
             native_phase_record(2,phase_start);
 #else

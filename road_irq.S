@@ -22,7 +22,10 @@ road_vblank_irq:
  clr.l scenery_scan
  clr.w scenery_owed
  addq.b #1,scenery_gen
- move.l road_active,road_scan
+ move.l road_active,%d0
+ move.l %d0,road_scan
+ add.l road_mask_offset,%d0
+ move.l %d0,road_mask_scan
  move.w #72,0xe80012
  bclr #5,0xe8800f
  movem.l (%sp)+,%d0-%d7/%a0-%a6
@@ -47,7 +50,10 @@ road_vblank_irq:
  clr.l scenery_scan            /* no line jobs until scenery_vblank has loaded the start state */
  clr.w scenery_owed
  addq.b #1,scenery_gen           /* a job list of the old frame that is still being written stops */
- move.l road_active,road_scan
+ move.l road_active,%d0
+ move.l %d0,road_scan
+ add.l road_mask_offset,%d0
+ move.l %d0,road_mask_scan
  move.w #72,0xe80012
  bclr #5,0xe8800f
  /* A raster interrupt below us is still writing a job list of the old frame: the run it is in
@@ -97,23 +103,62 @@ road_raster_irq:
 #endif
  addq.l #1,road_irq_count
  move.l road_scan,%a0
- move.l (%a0)+,0xeb0800
- move.l (%a0)+,0xeb0804
- move.l (%a0),0xe80020
- move.l (%a0)+,0xe80024
- move.l (%a0)+,0xe82222
- move.l (%a0)+,0xe82226
- move.l (%a0)+,0xe82242
- move.l (%a0)+,0xe82246
+ /* r031f: only the register groups that differ from the line before (RoadFrame::row_changed) */
+ move.l %d0,-(%sp)
+ move.l %a1,-(%sp)
+ move.l road_mask_scan,%a1
+ move.w (%a1)+,%d0
+ move.l %a1,road_mask_scan
+ move.l (%sp)+,%a1
+ lsr.w #1,%d0
+ bcc 1f
+ move.l (%a0),0xeb0800
+1:
+ lsr.w #1,%d0
+ bcc 1f
+ move.l 4(%a0),0xeb0804
+1:
+ lsr.w #1,%d0
+ bcc 1f
+ move.l 8(%a0),0xe80020
+ move.l 8(%a0),0xe80024
+1:
+ lsr.w #1,%d0
+ bcc 1f
+ move.l 12(%a0),0xe82222
+ move.l 16(%a0),0xe82226
+1:
+ lsr.w #1,%d0
+ bcc 1f
+ move.l 20(%a0),0xe82242
+ move.l 24(%a0),0xe82246
+1:
  /* r022: graphic palette 240..243 and 247 = road classes 0,1,2,3 and 7 */
- move.l (%a0)+,0xe821e0
- move.l (%a0)+,0xe821e4
- move.w (%a0)+,0xe821ee
- move.w (%a0)+,0xe8001a
- move.w (%a0)+,0xe8001e
- move.w (%a0)+,0xe82600
- move.w (%a0)+,0xeb0808
- move.w (%a0)+,0xe80012
+ lsr.w #1,%d0
+ bcc 1f
+ move.l 28(%a0),0xe821e0
+ move.l 32(%a0),0xe821e4
+ move.w 36(%a0),0xe821ee
+1:
+ lsr.w #1,%d0
+ bcc 1f
+ move.w 38(%a0),0xe8001a
+1:
+ lsr.w #1,%d0
+ bcc 1f
+ move.w 40(%a0),0xe8001e
+1:
+ lsr.w #1,%d0
+ bcc 1f
+ move.w 42(%a0),0xe82600
+1:
+ lsr.w #1,%d0
+ bcc 1f
+ move.w 44(%a0),0xeb0808
+1:
+ move.w 46(%a0),0xe80012
+ lea 48(%a0),%a0
+ move.l (%sp)+,%d0
  move.l %a0,road_scan
  /* End of service here: the scenery jobs below run with the interrupt mask at 5, so the next
     raster interrupt (and the other MFP interrupts) can come in while they are written. The

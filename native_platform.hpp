@@ -15,6 +15,8 @@ void road_vblank_irq();void road_raster_irq();
 RoadRow* volatile road_active=0;
 RoadRow* volatile road_pending=0;
 RoadRow* volatile road_scan=0;
+// r031f: where the raster interrupt reads RoadFrame::row_changed (set with road_scan at the vertical blank)
+extern "C"{uint16_t* volatile road_mask_scan=0;uint32_t road_mask_offset=uint32_t(offsetof(RoadFrame,row_changed));}
 volatile uint32_t road_vblanks=0,road_shown=0,road_irq_count=0;
 extern "C"{volatile uint8_t road_vblank_busy=0;volatile uint32_t road_vblank_overruns=0;}
 static uint32_t io_probe_ns[5],io_probe_n[5],pcg_long_ns=0;
@@ -128,7 +130,7 @@ static void platform_init(){
  if(native_hz60)HW16(0xe80008)=524;   // r029 HZ60: R04 vertical total 525 lines: 31.5 kHz / 525 = 60 Hz (display lines 72..520 unchanged)
  HW16(0xe80012)=1023;HW16(0xe82400)=1;HW16(0xe82500)=0x06e4;HW16(0xe82600)=0x004f;
  for(unsigned a=0xe80014;a<=0xe80026;a+=2)HW16(a)=0;
- road_build(hwroad,display_palette,road_frames[0]);road_stream(road_frames[0]);road_active=road_frames[0].rows;
+ road_build(hwroad,display_palette,road_frames[0]);road_stream(road_frames[0]);road_rows_changed(road_frames[0]);road_active=road_frames[0].rows;
  audio_start(native_audio_game);   // r031: FM chip (needs supervisor mode); not in the display test
  unsigned short sr=mask_irqs();
  saved_vblank=*(volatile uint32_t*)0x134;saved_raster=*(volatile uint32_t*)0x138;

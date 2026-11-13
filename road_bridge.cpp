@@ -190,6 +190,15 @@ void road_build(const HWRoad&r,const uint16_t*pal,RoadFrame&f){
   f.mode[y]=mode;
  }
 }
+// After everything that changes the rows (road_build, visuals_build): see RoadFrame::row_changed.
+void road_rows_changed(RoadFrame&f){
+ f.row_changed[0]=0x3ff;
+ for(unsigned y=1;y<224;y++){const RoadRow&a=f.rows[y-1],&b=f.rows[y];unsigned m=0;
+  if(a.bg0!=b.bg0)m|=1;if(a.bg1!=b.bg1)m|=2;if(a.gpage!=b.gpage)m|=4;
+  if(memcmp(a.front,b.front,sizeof a.front))m|=8;if(memcmp(a.back,b.back,sizeof a.back))m|=16;if(memcmp(a.ground,b.ground,sizeof a.ground))m|=32;
+  if(a.bg_y!=b.bg_y)m|=64;if(a.bg_far_y!=b.bg_far_y)m|=128;if(a.control!=b.control)m|=256;if(a.road_enable!=b.road_enable)m|=512;
+  f.row_changed[y]=uint16_t(m);}
+}
 static unsigned bgpixel(const uint16_t*map,uint32_t xy,int x,int y){
  unsigned sx=((xy>>16)+x)&511,sy=((xy&511)+y)&511;
  unsigned code=map[(sy>>3)*64+(sx>>3)]&255;
