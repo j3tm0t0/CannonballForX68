@@ -31,9 +31,8 @@ static uint32_t background_recomposed_rows=0;
 static uint32_t background_far_checks=0,background_data_errors=0,background_palette_errors=0;
 static bool background_ready=false,background_attempted=false,background_refresh=false,background_palette_refresh=false;
 static uint32_t background_rebuilds=0,background_capacity_waits=0,background_source_frames=0;
-#ifndef OR_X68K
+// PC: the background bytes of the GVRAM. X68000 (r031h): a copy of them in main memory.
 static uint8_t background_ring[512*512];
-#endif
 static int mod(int v,int n){v%=n;return v<0?v+n:v;}
 static uint16_t tile_word(unsigned a){const uint8_t*p=video.tile_layer->text_ram;return (p[a]<<8)|p[a+1];}
 // A visible black pixel must not use the hardware transparent colour word.
@@ -308,8 +307,17 @@ static int unwrap_target(int previous,int requested,int width){int d=mod(request
 static void ring_column_rows(unsigned l,int world,unsigned y0,unsigned count){
  uint8_t val[512];fill_col(l,unsigned(world)&1023,y0&511,count,val);
  const unsigned s=l?4:0;const uint8_t keep=l?0x0f:0xf0;
+#ifdef OR_X68K
+ // r031h: background_ring is a copy in main memory of the background bytes in the GVRAM. The byte
+ // is read from the copy (a GVRAM read costs as much as a write on the real bus) and written to
+ // the GVRAM only when it changes.
+ uint8_t*const sh=background_ring+(unsigned(world)&511);volatile uint8_t*const base=BG_STORE_BASE+BG_STORE_X(unsigned(world)&511);
+ for(unsigned i=0;i<count;i++){const unsigned yy=(y0+i)&511;const uint8_t old=sh[yy*512],v=uint8_t((old&keep)|((val[i]&15)<<s));
+  if(v!=old){sh[yy*512]=v;base[yy*BG_STORE_ROW]=v;}}
+#else
  volatile uint8_t*base=BG_STORE_BASE+BG_STORE_X(unsigned(world)&511);
  for(unsigned i=0;i<count;i++){volatile uint8_t*p=base+((y0+i)&511)*BG_STORE_ROW;*p=uint8_t((*p&keep)|((val[i]&15)<<s));}
+#endif
 }
 // ring row y, ring columns of world first..first+count-1
 static void ring_row_span(unsigned l,int first,unsigned count,unsigned y){
@@ -320,7 +328,13 @@ static void ring_row_span(unsigned l,int first,unsigned count,unsigned y){
  while(i<count){
   unsigned c=unsigned(first+int(i))&511,n=512-c;if(n>count-i)n=count-i;
   volatile uint8_t*out=row+BG_STORE_X(c);
+#ifdef OR_X68K
+  uint8_t*const sh=background_ring+(y&511)*512+c;
+  for(unsigned k=0;k<n;k++){const uint8_t old=sh[k],v=uint8_t((old&keep)|((val[i+k]&15)<<s));
+   if(v!=old){sh[k]=v;out[BG_STORE_X(k)]=v;}}
+#else
   for(unsigned k=0;k<n;k++){volatile uint8_t*p=out+BG_STORE_X(k);*p=uint8_t((*p&keep)|((val[i+k]&15)<<s));}
+#endif
   i+=n;
  }
 }
@@ -446,9 +460,8 @@ void visuals_stream(const RoadFrame&f){
 #ifdef OR_X68K
    for(unsigned y=0;y<224;y++){volatile uint8_t*d=(volatile uint8_t*)(0xc00001UL+y*1024UL);const uint8_t*src=static_img+y*320;
     for(unsigned x=0;x<320;x++)d[x*2]=src[x];}
-#else
-   for(unsigned y=0;y<224;y++)memcpy(background_ring+y*512,static_img+y*320,320);
 #endif
+   for(unsigned y=0;y<224;y++)memcpy(background_ring+y*512,static_img+y*320,320);   // (X68000: the copy of the GVRAM bytes)
    static_dirty=false;
   }
   return;
