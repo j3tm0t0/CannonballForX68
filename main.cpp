@@ -44,7 +44,10 @@ int main(int argc,char**argv) {
 #endif
 #ifdef OR_X68K
     // r031n: on a 060turbo, run again in local memory (native_platform.hpp) unless MAIN is given
-    {bool stay=false;for(int a=1;a<argc;a++){char w[8]={0};for(int k=0;k<7&&argv[a][k];k++)w[k]=char(argv[a][k]|32);if(!strcmp(w,"main"))stay=true;}
+    // (MAIN is taken out of the arguments here, so the ones counted by position stay where they are)
+    {bool stay=false;int n=1;
+     for(int a=1;a<argc;a++){char w[8]={0};for(int k=0;k<7&&argv[a][k];k++)w[k]=char(argv[a][k]|32);if(!strcmp(w,"main"))stay=true;else argv[n++]=argv[a];}
+     argc=n;
      if(!stay)native_run_in_local_memory();}
 #endif
     puts("Cannonball for x68 v0.2 - unofficial X68000 port by Mattsuan-Z@ColtMaz");
