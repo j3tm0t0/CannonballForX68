@@ -21,6 +21,7 @@ extern "C" {
  volatile uint32_t audio_ticks_done=0,audio_fm_writes=0,audio_fm_timeouts=0;
  uint8_t audio_enabled=1;                // NOSOUND argument: 0
  uint8_t audio_pcm_enabled=1;            // NOPCM argument: 0
+ uint8_t audio_fm_enabled=1;             // NOFM argument: 0 (the sound code still runs, for the PCM part)
  volatile uint32_t audio_pcm_bytes=0,audio_pcm_resyncs=0;
  uint16_t audio_ticks_per_blank=2254;    // 125 Hz / 55.458 Hz, in 1/1000 (HZ60: 2083)
  void audio_vblank();
@@ -75,6 +76,7 @@ void YM2151::write_reg(int r,int v){
  // timers: the chip must not raise its interrupt on the X68000 (the sound code is paced by the
  // vertical blank), so the timer control register is left alone
  if(r==0x14)return;
+ if(!audio_fm_enabled)return;
  // register 0x1B: bits 7 and 6 are the X68000's ADPCM clock select and FDD ready lines (CT1/CT2).
  // opm_write keeps what the system has set and takes only the LFO waveform from the game.
  opm_write(unsigned(r),unsigned(v));
@@ -86,7 +88,10 @@ void YM2151::write_reg(int r,int v){
 // time), in mono, and coded as ADPCM into a ring of memory that the DMA plays without end
 // (IOCS _ADPCMLOT with a link array whose last block points back to the first). Each vertical
 // blank looks where the DMA is reading and codes enough samples to stay a fixed distance ahead.
-enum {PCM_SHIFT=5};   // mixed sum -> the ADPCM's 12 bits
+// mixed sum -> the ADPCM's 12 bits. 4: the PCM part then comes out as loud as the FM part, as it is
+// with Cannonball's own chip emulators for the same sound commands (XEiJ recordings: FM 1897, PCM
+// 1074 with a shift of 5; the emulators give 2066 and 2067).
+enum {PCM_SHIFT=4};
 static uint8_t*pcm_rom=0,*pcm_low=0,*pcm_regs=0;static uint32_t pcm_mask=0;   // the chip's ROM, per-channel address fraction, registers
 SegaPCM::SegaPCM(uint32_t,AssetLoader*asset_,uint8_t*ram_,int32_t){ram=ram_;low=new uint8_t[16];memset(low,0,16);pcm_asset=asset_?asset_->asset:0;max_addr=asset_?int32_t(asset_->length):0;bankshift=12;bankmask=0x70;rgnmask=max_addr-1;downsample=0;
  for(int i=0;i<0x100;i++)ram[i]=0xff;
