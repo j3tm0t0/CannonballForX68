@@ -842,7 +842,13 @@ static void scenery_print(){
 //    SCENERY_LINE_BUDGET longs per line. Fresh ones are loaded in the vertical blank.
 //    What does not fit is left out (counted as dropped).
 // ---------------------------------------------------------------------------
-alignas(16) static uint16_t scenery_pixels[320*224];
+// The roadside objects are drawn into 8-bit codes: 0 = no pixel, 0x11..0xdf = a placed colour
+// ((block+1)<<4|index, blocks 0..12), 0xe0..0xfe = a colour not planned, slot code-0xe0 of the
+// frame (scenery_slot_idx holds its palette index; it is placed when the tile pass meets it),
+// 0xff = a pixel whose colour found no room (no pixel in the end).
+alignas(16) static uint8_t scenery_pixels[320*224];
+static uint16_t scenery_slot_idx[31];static uint8_t scenery_slot_of[8192];
+static uint32_t scenery_slot_overflow=0;   // colours not planned beyond the 31 slots (placed at once)
 static int scenery_low=224,scenery_high=0;
 static uint8_t scenery_map[8192];static const uint16_t*scenery_palette=0;
 static uint32_t scenery_diag[8];bool scenery_enabled=true;   // G key: roadside objects on/off (the car patterns are scheduled either way)
@@ -920,11 +926,11 @@ static uint32_t scenery_ref(SceneryPacket&S,unsigned off){
 }
 struct SceneryJob{int16_t line;uint8_t pcg;uint8_t pad;uint16_t res,sprite;uint32_t mask;};   // mask: the longs of the pattern to write
 #ifdef OR_X68K
-extern "C" uint32_t scenery_tile_finish(uint16_t*src,uint32_t rowbits,const uint32_t*rowLR,uint32_t*enc);
-extern "C" void scenery_tile_split(uint16_t*src,uint32_t rowbits,uint32_t**encp);
+extern "C" uint32_t scenery_tile_finish8(uint8_t*src,uint32_t rowbits,const uint32_t*rowLR,uint32_t*enc);
+extern "C" void scenery_tile_split8(uint8_t*src,uint32_t rowbits,uint32_t**encp);
 extern "C" uint32_t scenery_pcg_hash(const uint32_t*enc);
-extern "C" uint32_t scenery_tile_rows_learn(const uint16_t*src,unsigned rows,uint32_t*rowLR,const uint16_t*block_bit,uint8_t*met_q);
-extern "C" uint32_t scenery_tile_rows(const uint16_t*src,unsigned rows,uint32_t*rowLR,const uint16_t*block_bit);
+extern "C" uint32_t scenery_tile_rows8_learn(const uint8_t*src,unsigned rows,uint32_t*rowLR,const uint16_t*block_bit,uint8_t*met_q);
+extern "C" uint32_t scenery_tile_rows8(const uint8_t*src,unsigned rows,uint32_t*rowLR,const uint16_t*block_bit);
 #ifdef CBX68_ASM_CHECK
 static uint32_t asm_check[8];static uint8_t chk_met[256];   // rows: calls, colour lookups left to C, mismatches; finish: calls, mismatches
 #endif
@@ -1074,6 +1080,29 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
 #ifdef OR_X68K
  uint32_t tc=platform_fine_clock();
 #endif
+ auto lookup=[&](unsigned v)->unsigned{
+  const unsigned idx=v&8191;unsigned q=scenery_map[idx];if(q)return q==255?0:q;
+  const unsigned bank=idx>>4;const uint16_t col=pal[idx];
+  if(bank_block[bank]==-1){bank_block[bank]=-2;bank_list[nbank++]=uint16_t(bank);}
+  int b=-1;int cur=bank_block[bank];
+  if(cur>=0){for(unsigned n=1;n<=bcount[cur];n++)if(S.palette[cur][n]==col){q=((cur+1)<<4)|n;break;}
+   if(!q&&bcount[cur]<15)b=cur;}
+  if(!q&&b<0){for(unsigned k=0;k<S.blocks&&!q;k++)for(unsigned n=1;n<=bcount[k];n++)if(S.palette[k][n]==col){q=((k+1)<<4)|n;break;}}
+  if(!q&&b<0){if(S.blocks<block_limit){b=S.blocks++;bcount[b]=0;}
+   else{unsigned room=0;for(unsigned k=0;k<S.blocks;k++)if(15-bcount[k]>room){room=15-bcount[k];b=int(k);}}}
+  if(!q&&b>=0){unsigned n=++bcount[b];S.palette[b][n]=col;q=((b+1)<<4)|n;bank_block[bank]=int8_t(b);++lookup_changes;}
+  if(!q){scenery_map[idx]=255;++S.dropped_banks;++lookup_changes;}else scenery_map[idx]=uint8_t(q);
+  scenery_used[nused++]=uint16_t(idx);
+  return q;};
+ // a colour not planned: its slot code for this frame (the tile pass places it, in pixel order)
+ unsigned nslot=0;
+ auto slot=[&](unsigned idx)->unsigned{
+  if(scenery_slot_of[idx])return scenery_slot_of[idx];
+  if(nslot<31){scenery_slot_idx[nslot]=uint16_t(idx);scenery_slot_of[idx]=uint8_t(0xe0+nslot);return 0xe0+nslot++;}
+  // no slot left (not met in the test run): placed now, before the tile pass, so it may take a
+  // palette entry ahead of a colour met earlier in the scan; a colour with no room is drawn as
+  // 0xff (covers what is under it, as the palette index did, and becomes no pixel)
+  ++scenery_slot_overflow;const unsigned q=lookup(idx);return q?q:0xff;};
  // r026c: the buffer is cleared by the tile pass (each non-empty 16-pixel run is zeroed after use)
  int low=224,high=0;
  // tiles that a captured sprite may have drawn into (bit tx of row ty); the tile pass
@@ -1091,14 +1120,14 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   int top=(r[0]&511)-256,rows=(r[5]>>8)+1,bottom=top+((r[4]&0x8000)?rows-1:1-rows);
   low=std::min(low,std::min(top,bottom));high=std::max(high,std::max(top,bottom)+1);
   // r026e: drawn straight into palette-block codes ((block+1)<<4|index); colours not planned
-  // keep their palette index (>= 0x800) and are placed in the tile pass. Shadow pixels are left
+  // get a slot code (see scenery_pixels) and are placed in the tile pass. Shadow pixels are left
   // out (no darkening on the X68000).
   bool draw_it=!reuse;
   if(partial){const int lo=std::min(top,bottom),hi=std::max(top,bottom);draw_it=false;
    if(hi>=0&&lo<=223)for(int ty=std::max(0,lo)>>4;ty<=std::min(223,hi)>>4;ty++)if(dirty_rows&(1u<<ty)){draw_it=true;break;}}
   if(draw_it){uint16_t table[16];const unsigned base=COLOR_BASE_SCENERY+((r[5]&127)<<4);const bool shadow=(r[3]&0x4000)!=0;
-   for(unsigned k=0;k<16;k++){if(k==0||k==15||(shadow&&k==10)){table[k]=0;continue;}unsigned q=scenery_map[base|k];table[k]=uint16_t(q==255?0:q?q:(base|k));}
-   int xb[2]={320,-1};video.sprite_layer->capture_entry_table(r,scenery_pixels,table,xb);
+   for(unsigned k=0;k<16;k++){if(k==0||k==15||(shadow&&k==10)){table[k]=0;continue;}unsigned q=scenery_map[base|k];table[k]=uint16_t(q==255?0:q?q:slot(base|k));}
+   int xb[2]={320,-1};video.sprite_layer->capture_entry_table8(r,scenery_pixels,table,xb);
    const int x0=std::max(0,xb[0]),x1=std::min(319,xb[1]),y0=std::max(0,std::min(top,bottom)),y1=std::min(223,std::max(top,bottom));
    if(x0<=x1&&y0<=y1){const uint32_t cols=((2u<<(x1>>4))-1)&~((1u<<(x0>>4))-1);for(int ty=y0>>4;ty<=y1>>4;ty++)tile_live[ty]|=cols;}}
 #ifndef OR_X68K
@@ -1134,20 +1163,6 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
 #ifndef OR_X68K
  static uint16_t check_copy[320*224];memcpy(check_copy,scenery_std,sizeof check_copy);scenery_check_pixels=check_copy;memset(scenery_std,0,sizeof scenery_std);
 #endif
- auto lookup=[&](unsigned v)->unsigned{
-  const unsigned idx=v&8191;unsigned q=scenery_map[idx];if(q)return q==255?0:q;
-  const unsigned bank=idx>>4;const uint16_t col=pal[idx];
-  if(bank_block[bank]==-1){bank_block[bank]=-2;bank_list[nbank++]=uint16_t(bank);}
-  int b=-1;int cur=bank_block[bank];
-  if(cur>=0){for(unsigned n=1;n<=bcount[cur];n++)if(S.palette[cur][n]==col){q=((cur+1)<<4)|n;break;}
-   if(!q&&bcount[cur]<15)b=cur;}
-  if(!q&&b<0){for(unsigned k=0;k<S.blocks&&!q;k++)for(unsigned n=1;n<=bcount[k];n++)if(S.palette[k][n]==col){q=((k+1)<<4)|n;break;}}
-  if(!q&&b<0){if(S.blocks<block_limit){b=S.blocks++;bcount[b]=0;}
-   else{unsigned room=0;for(unsigned k=0;k<S.blocks;k++)if(15-bcount[k]>room){room=15-bcount[k];b=int(k);}}}
-  if(!q&&b>=0){unsigned n=++bcount[b];S.palette[b][n]=col;q=((b+1)<<4)|n;bank_block[bank]=int8_t(b);++lookup_changes;}
-  if(!q){scenery_map[idx]=255;++S.dropped_banks;++lookup_changes;}else scenery_map[idx]=uint8_t(q);
-  scenery_used[nused++]=uint16_t(idx);
-  return q;};
  static uint32_t sprite_hash[SCENERY_MAX];
  // r026d: fast path for colours already placed; colours are learned on every 8th frame only;
  // pixel pairs that are both empty are skipped; one-block tiles are encoded without tests.
@@ -1166,7 +1181,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   // (the palette is the kept frame's with this frame's additions: the carried plan)
   S.dropped_banks=c_dropped_banks;
   // sprites drawn for a dirty row also reach into other rows: those pixels are not wanted
-  for(int ty=0;ty<14;ty++)if(tile_live[ty]&&!(dirty_rows&(1u<<ty))){memset(scenery_pixels+ty*16*320,0,16*320*2);tile_live[ty]=0;}
+  for(int ty=0;ty<14;ty++)if(tile_live[ty]&&!(dirty_rows&(1u<<ty))){memset(scenery_pixels+ty*16*320,0,16*320);tile_live[ty]=0;}
   ++scenery_partial_frames;
  }
  if(!reuse)for(int ty=low/16;ty<(high+15)/16;ty++){
@@ -1181,35 +1196,32 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
    continue;}
   for(uint32_t live=tile_live[ty];live;live&=live-1){const unsigned tx=unsigned(__builtin_ctz(live));
   uint32_t rowLR[32];uint32_t*const rowL=rowLR,*const rowR=rowLR+16;unsigned mask=0,rowbits=0;
-  uint16_t*const tile_src=scenery_pixels+ty*16*320+tx*16;
+  uint8_t*const tile_src=scenery_pixels+ty*16*320+tx*16;
+  auto code=[&](unsigned q)->unsigned{return q<0xe0?q:q==0xff?0:lookup(scenery_slot_idx[q-0xe0]);};
 #ifdef OR_X68K
   // asm first pass (scenery_tiles.S): whole tile, unless a colour still needs a lookup
   bool rows_done=false;
 #ifdef CBX68_ASM_CHECK
   uint32_t chkLR[32];uint32_t chk=0xffffffffu;
   // (learn frames: the asm marks met_q on a copy, compared with the C marks at the end of the frame)
-  {chk=learn?scenery_tile_rows_learn(tile_src,rows,chkLR,block_bit,chk_met):scenery_tile_rows(tile_src,rows,chkLR,block_bit);++asm_check[0];if(chk==0xffffffffu)++asm_check[1];}
+  {chk=learn?scenery_tile_rows8_learn(tile_src,rows,chkLR,block_bit,chk_met):scenery_tile_rows8(tile_src,rows,chkLR,block_bit);++asm_check[0];if(chk==0xffffffffu)++asm_check[1];}
 #else
-  {const uint32_t rv=learn?scenery_tile_rows_learn(tile_src,rows,rowLR,block_bit,met_q):scenery_tile_rows(tile_src,rows,rowLR,block_bit);
+  {const uint32_t rv=learn?scenery_tile_rows8_learn(tile_src,rows,rowLR,block_bit,met_q):scenery_tile_rows8(tile_src,rows,rowLR,block_bit);
    if(rv!=0xffffffffu){mask=rv&0xffff;rowbits=rv>>16;rows_done=true;}}
 #endif
   if(!rows_done)
 #endif
   for(unsigned yy=0;yy<rows;yy++){
-   uint16_t*src=tile_src+yy*320;alias_u32*s32=(alias_u32*)src;
-   if(!(s32[0]|s32[1]|s32[2]|s32[3]|s32[4]|s32[5]|s32[6]|s32[7])){rowL[yy]=rowR[yy]=0;continue;}
+   uint8_t*src=tile_src+yy*320;alias_u32*s32=(alias_u32*)src;
+   if(!(s32[0]|s32[1]|s32[2]|s32[3])){rowL[yy]=rowR[yy]=0;continue;}
    uint32_t a=0,b=0;
    for(unsigned xx=0;xx<8;xx+=2){unsigned q0=0,q1=0;
-    if(s32[xx>>1]){q0=src[xx];q1=src[xx+1];
-     if(q0>=256)q0=lookup(q0);   // a colour that was not planned (same order as before)
-     if(q1>=256)q1=lookup(q1);
+    if(src[xx]|src[xx+1]){q0=code(src[xx]);q1=code(src[xx+1]);   // (a colour not planned is placed here, in pixel order)
      mask|=block_bit[q0]|block_bit[q1];
      if(learn){met_q[q0]=1;met_q[q1]=1;}}
     a=(a<<8)|((q0&15)<<4)|(q1&15);}
    for(unsigned xx=8;xx<16;xx+=2){unsigned q0=0,q1=0;
-    if(s32[xx>>1]){q0=src[xx];q1=src[xx+1];
-     if(q0>=256)q0=lookup(q0);
-     if(q1>=256)q1=lookup(q1);
+    if(src[xx]|src[xx+1]){q0=code(src[xx]);q1=code(src[xx+1]);
      mask|=block_bit[q0]|block_bit[q1];
      if(learn){met_q[q0]=1;met_q[q1]=1;}}
     b=(b<<8)|((q0&15)<<4)|(q1&15);}
@@ -1220,32 +1232,32 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
    if(bad)++asm_check[2];}
 #endif
   if(!mask){   // r028 fix: pixels whose colour was dropped (no palette room) are cleared too
-   for(unsigned yy=0;yy<rows;yy++)if(rowbits&(1u<<yy)){alias_u32*s32=(alias_u32*)(tile_src+yy*320);s32[0]=s32[1]=s32[2]=s32[3]=s32[4]=s32[5]=s32[6]=s32[7]=0;}
+   for(unsigned yy=0;yy<rows;yy++)if(rowbits&(1u<<yy)){alias_u32*s32=(alias_u32*)(tile_src+yy*320);s32[0]=s32[1]=s32[2]=s32[3]=0;}
    continue;}
   for(unsigned yy=rows;yy<16;yy++)rowL[yy]=rowR[yy]=0;
   if(!(mask&(mask-1))){   // one block: the nibbles are the pattern
    const unsigned bnum=unsigned(__builtin_ctz(mask));
    if(S.count>=SCENERY_MAX){++S.dropped;++row_dropped[ty];++scenery_overflow;
-    for(unsigned yy=0;yy<rows;yy++)if(rowbits&(1u<<yy)){alias_u32*s32=(alias_u32*)(tile_src+yy*320);s32[0]=s32[1]=s32[2]=s32[3]=s32[4]=s32[5]=s32[6]=s32[7]=0;}
+    for(unsigned yy=0;yy<rows;yy++)if(rowbits&(1u<<yy)){alias_u32*s32=(alias_u32*)(tile_src+yy*320);s32[0]=s32[1]=s32[2]=s32[3]=0;}
     continue;}
    ScenerySprite&sp=S.sprite[S.count];uint32_t*enc=S.pcg[S.count];
    sp.x=int16_t(tx*16+16);sp.y=int16_t(ty*16+16);sp.block=uint8_t(bnum);sp.row=uint8_t(ty);sp.kept=0;
 #if defined(OR_X68K)&&!defined(CBX68_ASM_CHECK)
-   sprite_hash[S.count]=scenery_tile_finish(tile_src,rowbits,rowLR,enc);++S.count;
+   sprite_hash[S.count]=scenery_tile_finish8(tile_src,rowbits,rowLR,enc);++S.count;
    continue;
 #endif
    uint32_t h=2166136261UL;
    for(unsigned yy=0;yy<16;yy++){const uint32_t l=rowL[yy],r=rowR[yy];enc[yy]=l;enc[yy+16]=r;h^=l;h*=16777619UL;h^=r;h*=16777619UL;}
 #if defined(OR_X68K)&&defined(CBX68_ASM_CHECK)
-   {static uint16_t chk_px[16*16];uint32_t chk_enc[32];for(unsigned yy=0;yy<rows;yy++)memcpy(chk_px+yy*16,tile_src+yy*320,32);
+   {static uint8_t chk_px[16*16];uint32_t chk_enc[32];for(unsigned yy=0;yy<rows;yy++)memcpy(chk_px+yy*16,tile_src+yy*320,16);
     // run the asm on the real rows, then compare hash, pattern and that exactly the rows in rowbits were cleared
-    const uint32_t ah=scenery_tile_finish(tile_src,rowbits,rowLR,chk_enc);++asm_check[3];
+    const uint32_t ah=scenery_tile_finish8(tile_src,rowbits,rowLR,chk_enc);++asm_check[3];
     bool bad=ah!=h||memcmp(chk_enc,enc,sizeof chk_enc);
-    for(unsigned yy=0;yy<rows&&!bad;yy++)for(unsigned xx=0;xx<16;xx++){const uint16_t want=(rowbits&(1u<<yy))?0:chk_px[yy*16+xx];if(tile_src[yy*320+xx]!=want){bad=true;break;}}
+    for(unsigned yy=0;yy<rows&&!bad;yy++)for(unsigned xx=0;xx<16;xx++){const uint8_t want=(rowbits&(1u<<yy))?0:chk_px[yy*16+xx];if(tile_src[yy*320+xx]!=want){bad=true;break;}}
     if(bad)++asm_check[4];}
 #endif
    sprite_hash[S.count]=h;++S.count;
-   for(unsigned yy=0;yy<rows;yy++)if(rowbits&(1u<<yy)){alias_u32*s32=(alias_u32*)(tile_src+yy*320);s32[0]=s32[1]=s32[2]=s32[3]=s32[4]=s32[5]=s32[6]=s32[7]=0;}
+   for(unsigned yy=0;yy<rows;yy++)if(rowbits&(1u<<yy)){alias_u32*s32=(alias_u32*)(tile_src+yy*320);s32[0]=s32[1]=s32[2]=s32[3]=0;}
    continue;}
   // several blocks: one sprite per block, in block order (dropped when the list is full)
   unsigned ord[16],blocks_here[16],nb=0;
@@ -1257,24 +1269,24 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
 #ifdef OR_X68K
 #ifdef CBX68_ASM_CHECK
   // asm second pass on a copy of the tile; compared with the C result below
-  static uint16_t split_px[16*320];static uint32_t split_enc[16][32];uint32_t split_hash[16];
+  alignas(4) static uint8_t split_px[16*320];static uint32_t split_enc[16][32];uint32_t split_hash[16];
   const bool split_chk=chk!=0xffffffffu&&take==nb;
-  if(split_chk){uint32_t*encp[16];for(unsigned yy=0;yy<rows;yy++)memcpy(split_px+yy*320,tile_src+yy*320,32);
+  if(split_chk){uint32_t*encp[16];for(unsigned yy=0;yy<rows;yy++)memcpy(split_px+yy*320,tile_src+yy*320,16);
    for(unsigned j=0;j<nb;j++){memset(split_enc[j],0,128);encp[blocks_here[j]+1]=split_enc[j];}
-   scenery_tile_split(split_px,rowbits,encp);for(unsigned j=0;j<nb;j++)split_hash[j]=scenery_pcg_hash(split_enc[j]);++asm_check[5];}
+   scenery_tile_split8(split_px,rowbits,encp);for(unsigned j=0;j<nb;j++)split_hash[j]=scenery_pcg_hash(split_enc[j]);++asm_check[5];}
 #else
   if(rows_done&&take==nb){uint32_t*encp[16];
    for(unsigned j=0;j<nb;j++){memset(S.pcg[first+j],0,128);encp[blocks_here[j]+1]=S.pcg[first+j];}
-   scenery_tile_split(tile_src,rowbits,encp);
+   scenery_tile_split8(tile_src,rowbits,encp);
    for(unsigned j=0;j<nb;j++)sprite_hash[first+j]=scenery_pcg_hash(S.pcg[first+j]);
    continue;}
 #endif
 #endif
   for(unsigned yy=0;yy<16;yy++){uint32_t lj[16]={0},rj[16]={0};
-   if(rowbits&(1u<<yy)){uint16_t*src=tile_src+yy*320;   // read again: every colour is placed by now
-    for(unsigned xx=0;xx<8;xx++){unsigned q=src[xx];if(q>=256)q=lookup(q);if(q){unsigned j=ord[q>>4];lj[j]|=uint32_t(q&15)<<(28-4*xx);}
-     q=src[xx+8];if(q>=256)q=lookup(q);if(q){unsigned j=ord[q>>4];rj[j]|=uint32_t(q&15)<<(28-4*xx);}}
-    alias_u32*s32=(alias_u32*)src;s32[0]=s32[1]=s32[2]=s32[3]=s32[4]=s32[5]=s32[6]=s32[7]=0;}
+   if(rowbits&(1u<<yy)){uint8_t*src=tile_src+yy*320;   // read again: every colour is placed by now
+    for(unsigned xx=0;xx<8;xx++){unsigned q=code(src[xx]);if(q){unsigned j=ord[q>>4];lj[j]|=uint32_t(q&15)<<(28-4*xx);}
+     q=code(src[xx+8]);if(q){unsigned j=ord[q>>4];rj[j]|=uint32_t(q&15)<<(28-4*xx);}}
+    alias_u32*s32=(alias_u32*)src;s32[0]=s32[1]=s32[2]=s32[3]=0;}
    for(unsigned j=0;j<take;j++){uint32_t*enc=S.pcg[first+j];enc[yy]=lj[j];enc[yy+16]=rj[j];hj[j]^=lj[j];hj[j]*=16777619UL;hj[j]^=rj[j];hj[j]*=16777619UL;}}
   for(unsigned j=0;j<take;j++)sprite_hash[first+j]=hj[j];
 #if defined(OR_X68K)&&defined(CBX68_ASM_CHECK)
@@ -1285,11 +1297,12 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   }
  }
  if(!reuse)for(int t=(high+15)/16;t<15;t++)if(t>=0)row_start[t]=uint16_t(S.count);
+ for(unsigned k=0;k<nslot;k++)scenery_slot_of[scenery_slot_idx[k]]=0;
  // learn which colours each bank uses (planned and met), then clear the tables
  for(unsigned k=0;k<nused;k++){unsigned idx=scenery_used[k],q=scenery_map[idx];if(learn&&q&&q!=255&&met_q[q])bank_seen_mask[idx>>4]|=uint16_t(1u<<(idx&15));scenery_map[idx]=0;}
 #if defined(OR_X68K)&&defined(CBX68_ASM_CHECK)
  // asm marks must be C marks; with no tile handed back to C this frame they must be all of them
- if(learn){bool bad=false;for(unsigned q=1;q<256;q++)if(chk_met[q]?!met_q[q]:(met_q[q]&&chk_bails==asm_check[1]))bad=true;
+ if(learn){bool bad=false;for(unsigned q=1;q<0xe0;q++)if(chk_met[q]?!met_q[q]:(met_q[q]&&chk_bails==asm_check[1]))bad=true;
   ++asm_check[7];if(bad)++asm_check[2];memset(chk_met,0,sizeof chk_met);}
 #endif
  if(learn)memset(met_q,0,sizeof met_q);
@@ -2010,5 +2023,6 @@ void visuals_print(){
  report_printf("R019 COMMIT calls=%lu us avg=%lu max=%lu\n",(unsigned long)commit_calls,(unsigned long)(commit_calls?commit_counts_total*50UL/commit_calls:0),(unsigned long)(commit_counts_max*50UL));
 #endif
  report_printf("R030 SCENERY REUSE frames=%lu of %lu\n",(unsigned long)scenery_reuse_frames,(unsigned long)scenery_frames);
+ report_printf("R044 SCENERY SLOTS overflow=%lu\n",(unsigned long)scenery_slot_overflow);
  report_printf("R030 STATIC PICTURE frames=%lu composes=%lu colours=%u\n",(unsigned long)static_frames,(unsigned long)static_composes,static_ncol);
  report_printf("BACKGROUND source_frames=%lu rebuilds=%lu capacity_waits=%lu recomposed_rows=%lu\n",(unsigned long)background_source_frames,(unsigned long)background_rebuilds,(unsigned long)background_capacity_waits,(unsigned long)background_recomposed_rows);report_printf("BG TRANSFER far_checks=%lu data_errors=%lu palette_errors=%lu\n",(unsigned long)background_far_checks,(unsigned long)background_data_errors,(unsigned long)background_palette_errors);}

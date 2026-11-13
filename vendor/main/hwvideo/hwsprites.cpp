@@ -198,3 +198,18 @@ void hwsprites::capture_entry_table(const uint16_t* r,uint16_t* dst,const uint16
   // the caller's table has no shadow entry (0x8000), so the kernels without the shadow test draw the same pixels
  sprite_fast_dispatch(sprites+bank*65536,dst,p,(flags&0x4000)==0,positive,false);
 }
+// The same with 8-bit pixels (the table's codes are < 256); no shadow kernels.
+void hwsprites::capture_entry_table8(const uint16_t* r,uint8_t* dst,const uint16_t* table,int* xbounds){
+ if(r[0]&0xd000)return;
+ SpriteFastParams p;
+ p.width=320;p.screen_height=224;p.clip_left=0;p.clip_right=320;p.clip_span=320;
+ const unsigned flags=r[4];p.address=r[1];p.pitch=((r[2]>>1)|((flags&0x1000)<<3))>>8;
+ p.top=(r[0]&511)-256;p.rows=(r[5]>>8)+1;p.y_direction=(flags&0x8000)?1:-1;
+ p.hzoom=flags&2047;p.vzoom=r[3]&2047;if(p.hzoom<64)p.hzoom=64;if(p.vzoom<64)p.vzoom=64;
+ bool positive=(flags&0x2000)!=0;p.x=r[6];if(p.x<128&&!positive)p.x+=512;p.x-=190;
+ p.color=COLOR_BASE+((r[5]&127)<<4);p.custom=table;p.xbounds=xbounds;
+ unsigned bank=((r[0]>>9)&7)%(SPRITES_LENGTH/65536);
+ const uint32_t* src=sprites+bank*65536;
+ if((flags&0x4000)==0){if(positive)sprite_scale<uint8_t,true,1,false>(src,dst,p);else sprite_scale<uint8_t,true,-1,false>(src,dst,p);}
+ else{if(positive)sprite_scale<uint8_t,false,1,false>(src,dst,p);else sprite_scale<uint8_t,false,-1,false>(src,dst,p);}
+}
