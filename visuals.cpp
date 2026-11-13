@@ -857,6 +857,10 @@ static const bool SCENERY_REWRITTEN_FIRST=CBX68_REWRITTEN_FIRST;
 #define CBX68_PACKET_REUSE 1
 #endif
 static const bool SCENERY_PACKET_REUSE=CBX68_PACKET_REUSE;static uint32_t scenery_packet_reuses=0;
+#ifndef CBX68_DIRTY_ROWS
+#define CBX68_DIRTY_ROWS 1
+#endif
+static const bool SCENERY_DIRTY_ROWS=CBX68_DIRTY_ROWS;static uint32_t scenery_partial_frames=0,scenery_full_why[3];
 static const bool SCENERY_DIFF=CBX68_DIFF;   // a pattern rewritten by a line job: only the longs that differ from what it held
 static uint32_t scenery_start_longs=0,scenery_restart_longs=0,scenery_line_longs=0;   // job list sizes, summed over the frames
 #ifndef OR_X68K
@@ -947,9 +951,53 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // A colour-learning frame also takes the kept tiles when the kept frame was itself computed on
  // a learning frame: the same picture marks the same colours, and those bits are already set
  // (bank_seen_mask only gains bits), so the pass would change nothing.
- static bool reuse_learned=false;
+ // tile rows of the kept frame whose colours have not been through a learning pass yet (r031b:
+ // a learning frame converts just those rows again; 0 = the kept frame can be taken as it is)
+ static uint32_t c_unlearned=0x3fff;
+ // r031b: the next changed frame must be a full pass (a partial one placed or dropped a colour
+ // outside the plan, or ran out of sprites: a full pass could do better)
+ static bool c_force_full=false;unsigned lookup_changes=0;
+ // the kept frame (r030), and for r031b where each tile row's sprites are in it and what it dropped
+ static uint16_t c_count,c_blocks,c_dropped,c_dropped_banks;static uint16_t c_palette[13][16];
+ static ScenerySprite c_sprite[SCENERY_MAX];static uint32_t c_pcg[SCENERY_MAX][32],c_hash[SCENERY_MAX];
+ static uint16_t c_row_start[15],c_row_dropped[14];static uint8_t c_bcount[13];
+ static uint16_t row_start[15],row_dropped[14];
  static uint32_t packet_gen=0;   // changes whenever the roadside sprites of a frame differ from the frame before
- const bool reuse=key_ok&&(!learn||reuse_learned)&&reuse_valid&&key_len==reuse_len&&!memcmp(reuse_new,reuse_key,key_len*2);
+ const bool reuse=key_ok&&(!learn||!c_unlearned)&&reuse_valid&&key_len==reuse_len&&!memcmp(reuse_new,reuse_key,key_len*2);
+ // r031b: a frame that differs from the kept one in a few sprites only (the same palette plan,
+ // the same number of sprites; e.g. the starter waving at the start): only the tile rows those
+ // sprites touch, in the kept frame or now, are drawn and converted again. The sprites of the
+ // other rows are taken from the kept frame, in the same order as a full pass gives them.
+ uint32_t dirty_rows=0;bool partial=false;
+ if(SCENERY_DIRTY_ROWS&&key_ok&&!reuse&&reuse_valid&&!c_force_full&&!c_dropped){
+  unsigned hdr=2;for(unsigned b=0;b<S.blocks;b++)hdr+=1+bcount[b];
+  const bool plan_same=hdr<=key_len&&hdr<=reuse_len&&!memcmp(reuse_new,reuse_key,hdr*2)&&(key_len-hdr)%23==0&&(reuse_len-hdr)%23==0;
+  if(!plan_same)++scenery_full_why[1];   // another palette plan
+  if(plan_same){
+   partial=true;
+   auto mark=[&](const uint16_t*r){const int top=(r[0]&511)-256,rws=(r[5]>>8)+1,bottom=top+((r[4]&0x8000)?rws-1:1-rws);
+    const int lo=std::min(top,bottom),hi=std::max(top,bottom);
+    if(hi<0||lo>223)return;
+    for(int ty=std::max(0,lo)>>4;ty<=std::min(223,hi)>>4;ty++)dirty_rows|=1u<<ty;};
+   const unsigned n_new=(key_len-hdr)/23,n_old=(reuse_len-hdr)/23;
+   const uint16_t*const e_new=reuse_new+hdr,*const e_old=reuse_key+hdr;
+   if(n_new==n_old){
+    for(unsigned i=0;i<n_new;i++)if(memcmp(e_new+i*23,e_old+i*23,46)){mark(e_new+i*23);mark(e_old+i*23);}
+   }else{
+    // sprites came or went: the same ones at the front and at the back of the two lists are
+    // unchanged (and in the same order); everything between counts as changed
+    ++scenery_full_why[0];
+    unsigned p=0;const unsigned least=std::min(n_new,n_old);
+    while(p<least&&!memcmp(e_new+p*23,e_old+p*23,46))++p;
+    unsigned q=0;while(q<least-p&&!memcmp(e_new+(n_new-1-q)*23,e_old+(n_old-1-q)*23,46))++q;
+    for(unsigned i=p;i<n_new-q;i++)mark(e_new+i*23);
+    for(unsigned i=p;i<n_old-q;i++)mark(e_old+i*23);
+   }
+   if(learn)dirty_rows|=c_unlearned;   // a learning frame also takes the rows that still need it
+   // not worth it when most of the screen is touched
+   if(__builtin_popcount(dirty_rows)>9){partial=false;++scenery_full_why[2];}   // too many rows
+  }
+ }
  // 1. capture
 #ifdef OR_X68K
  uint32_t tc=platform_fine_clock();
@@ -973,7 +1021,10 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   // r026e: drawn straight into palette-block codes ((block+1)<<4|index); colours not planned
   // keep their palette index (>= 0x800) and are placed in the tile pass. Shadow pixels are left
   // out (no darkening on the X68000).
-  if(!reuse){uint16_t table[16];const unsigned base=COLOR_BASE_SCENERY+((r[5]&127)<<4);const bool shadow=(r[3]&0x4000)!=0;
+  bool draw_it=!reuse;
+  if(partial){const int lo=std::min(top,bottom),hi=std::max(top,bottom);draw_it=false;
+   if(hi>=0&&lo<=223)for(int ty=std::max(0,lo)>>4;ty<=std::min(223,hi)>>4;ty++)if(dirty_rows&(1u<<ty)){draw_it=true;break;}}
+  if(draw_it){uint16_t table[16];const unsigned base=COLOR_BASE_SCENERY+((r[5]&127)<<4);const bool shadow=(r[3]&0x4000)!=0;
    for(unsigned k=0;k<16;k++){if(k==0||k==15||(shadow&&k==10)){table[k]=0;continue;}unsigned q=scenery_map[base|k];table[k]=uint16_t(q==255?0:q?q:(base|k));}
    int xb[2]={320,-1};video.sprite_layer->capture_entry_table(r,scenery_pixels,table,xb);
    const int x0=std::max(0,xb[0]),x1=std::min(319,xb[1]),y0=std::max(0,std::min(top,bottom)),y1=std::min(223,std::max(top,bottom));
@@ -1021,8 +1072,8 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   if(!q&&b<0){for(unsigned k=0;k<S.blocks&&!q;k++)for(unsigned n=1;n<=bcount[k];n++)if(S.palette[k][n]==col){q=((k+1)<<4)|n;break;}}
   if(!q&&b<0){if(S.blocks<block_limit){b=S.blocks++;bcount[b]=0;}
    else{unsigned room=0;for(unsigned k=0;k<S.blocks;k++)if(15-bcount[k]>room){room=15-bcount[k];b=int(k);}}}
-  if(!q&&b>=0){unsigned n=++bcount[b];S.palette[b][n]=col;q=((b+1)<<4)|n;bank_block[bank]=int8_t(b);}
-  if(!q){scenery_map[idx]=255;++S.dropped_banks;}else scenery_map[idx]=uint8_t(q);
+  if(!q&&b>=0){unsigned n=++bcount[b];S.palette[b][n]=col;q=((b+1)<<4)|n;bank_block[bank]=int8_t(b);++lookup_changes;}
+  if(!q){scenery_map[idx]=255;++S.dropped_banks;++lookup_changes;}else scenery_map[idx]=uint8_t(q);
   scenery_used[nused++]=uint16_t(idx);
   return q;};
  static uint32_t sprite_hash[SCENERY_MAX];
@@ -1038,8 +1089,25 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
 #if defined(OR_X68K)&&defined(CBX68_ASM_CHECK)
  const uint32_t chk_bails=asm_check[1];
 #endif
+ for(unsigned t=0;t<15;t++)row_start[t]=0;memset(row_dropped,0,sizeof row_dropped);
+ if(partial){
+  // the palette as the kept frame left it (its plan is this frame's plan; colours placed later stay)
+  S.blocks=c_blocks;memcpy(S.palette,c_palette,sizeof c_palette);for(unsigned b=0;b<13;b++)bcount[b]=c_bcount[b];
+  S.dropped_banks=c_dropped_banks;
+  // sprites drawn for a dirty row also reach into other rows: those pixels are not wanted
+  for(int ty=0;ty<14;ty++)if(tile_live[ty]&&!(dirty_rows&(1u<<ty))){memset(scenery_pixels+ty*16*320,0,16*320*2);tile_live[ty]=0;}
+  ++scenery_partial_frames;
+ }
  if(!reuse)for(int ty=low/16;ty<(high+15)/16;ty++){
   const unsigned rows=unsigned(std::min(16,224-ty*16));
+  row_start[ty]=uint16_t(S.count);
+  if(partial&&!(dirty_rows&(1u<<ty))){   // the kept frame's sprites of this row
+   unsigned a=c_row_start[ty],n=unsigned(c_row_start[ty+1])-a;
+   if(S.count+n>SCENERY_MAX){const unsigned fit=SCENERY_MAX-S.count;S.dropped+=uint16_t(n-fit);scenery_overflow+=n-fit;row_dropped[ty]=uint16_t(n-fit);n=fit;}
+   memcpy(S.sprite+S.count,c_sprite+a,n*sizeof c_sprite[0]);memcpy(S.pcg+S.count,c_pcg+a,n*sizeof c_pcg[0]);memcpy(sprite_hash+S.count,c_hash+a,n*4);
+   for(unsigned k=0;k<n;k++)S.sprite[S.count+k].kept=0;
+   S.count=uint16_t(S.count+n);S.dropped=uint16_t(S.dropped+c_row_dropped[ty]);row_dropped[ty]=uint16_t(row_dropped[ty]+c_row_dropped[ty]);
+   continue;}
   for(uint32_t live=tile_live[ty];live;live&=live-1){const unsigned tx=unsigned(__builtin_ctz(live));
   uint32_t rowLR[32];uint32_t*const rowL=rowLR,*const rowR=rowLR+16;unsigned mask=0,rowbits=0;
   uint16_t*const tile_src=scenery_pixels+ty*16*320+tx*16;
@@ -1086,7 +1154,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   for(unsigned yy=rows;yy<16;yy++)rowL[yy]=rowR[yy]=0;
   if(!(mask&(mask-1))){   // one block: the nibbles are the pattern
    const unsigned bnum=unsigned(__builtin_ctz(mask));
-   if(S.count>=SCENERY_MAX){++S.dropped;++scenery_overflow;
+   if(S.count>=SCENERY_MAX){++S.dropped;++row_dropped[ty];++scenery_overflow;
     for(unsigned yy=0;yy<rows;yy++)if(rowbits&(1u<<yy)){alias_u32*s32=(alias_u32*)(tile_src+yy*320);s32[0]=s32[1]=s32[2]=s32[3]=s32[4]=s32[5]=s32[6]=s32[7]=0;}
     continue;}
    ScenerySprite&sp=S.sprite[S.count];uint32_t*enc=S.pcg[S.count];
@@ -1112,7 +1180,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   unsigned ord[16],blocks_here[16],nb=0;
   for(unsigned b=0,mm=mask;mm;b++,mm>>=1)if(mm&1){ord[b+1]=nb;blocks_here[nb++]=b;}
   unsigned first=S.count,take=0;
-  for(unsigned j=0;j<nb;j++){if(S.count>=SCENERY_MAX){++S.dropped;++scenery_overflow;continue;}++S.count;++take;}
+  for(unsigned j=0;j<nb;j++){if(S.count>=SCENERY_MAX){++S.dropped;++row_dropped[ty];++scenery_overflow;continue;}++S.count;++take;}
   uint32_t hj[16];for(unsigned j=0;j<take;j++){hj[j]=2166136261UL;
    ScenerySprite&sp=S.sprite[first+j];sp.x=int16_t(tx*16+16);sp.y=int16_t(ty*16+16);sp.block=uint8_t(blocks_here[j]);sp.row=uint8_t(ty);sp.kept=0;}
 #ifdef OR_X68K
@@ -1145,6 +1213,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
 #endif
   }
  }
+ if(!reuse)for(int t=(high+15)/16;t<15;t++)if(t>=0)row_start[t]=uint16_t(S.count);
  // learn which colours each bank uses (planned and met), then clear the tables
  for(unsigned k=0;k<nused;k++){unsigned idx=scenery_used[k],q=scenery_map[idx];if(learn&&q&&q!=255&&met_q[q])bank_seen_mask[idx>>4]|=uint16_t(1u<<(idx&15));scenery_map[idx]=0;}
 #if defined(OR_X68K)&&defined(CBX68_ASM_CHECK)
@@ -1156,13 +1225,15 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  for(unsigned k=0;k<nbank;k++)bank_block[bank_list[k]]=-1;
  for(unsigned b=0;b<S.blocks;b++)for(unsigned n=bcount[b]+1;n<16;n++)S.palette[b][n]=0;
  // r030: keep this frame's tiles for a frame with the same sprites, or take the kept ones
- {static uint16_t c_count,c_blocks,c_dropped,c_dropped_banks;static uint16_t c_palette[13][16];
-  static ScenerySprite c_sprite[SCENERY_MAX];static uint32_t c_pcg[SCENERY_MAX][32],c_hash[SCENERY_MAX];
+ {
   if(reuse){S.count=c_count;S.blocks=c_blocks;S.dropped=c_dropped;S.dropped_banks=c_dropped_banks;memcpy(S.palette,c_palette,sizeof c_palette);
    memcpy(S.sprite,c_sprite,S.count*sizeof c_sprite[0]);memcpy(S.pcg,c_pcg,S.count*sizeof c_pcg[0]);memcpy(sprite_hash,c_hash,S.count*4);++scenery_reuse_frames;}
   else if(key_ok){c_count=S.count;c_blocks=S.blocks;c_dropped=S.dropped;c_dropped_banks=S.dropped_banks;memcpy(c_palette,S.palette,sizeof c_palette);
    memcpy(c_sprite,S.sprite,S.count*sizeof c_sprite[0]);memcpy(c_pcg,S.pcg,S.count*sizeof c_pcg[0]);memcpy(c_hash,sprite_hash,S.count*4);
-   memcpy(reuse_key,reuse_new,key_len*2);reuse_len=key_len;reuse_valid=true;reuse_learned=learn;}
+   memcpy(c_row_start,row_start,sizeof c_row_start);memcpy(c_row_dropped,row_dropped,sizeof c_row_dropped);for(unsigned b=0;b<13;b++)c_bcount[b]=uint8_t(bcount[b]);
+   memcpy(reuse_key,reuse_new,key_len*2);reuse_len=key_len;reuse_valid=true;
+   c_unlearned=learn?0:partial?(c_unlearned|dirty_rows):0x3fff;
+   c_force_full=partial&&(lookup_changes||S.dropped);}
   else reuse_valid=false;
   if(!reuse)++packet_gen;}   // the sprites of this frame are not the kept ones any more
 #ifdef OR_X68K
@@ -1802,7 +1873,7 @@ void visuals_print(){
 #endif
  report_printf("R026 PHASES us capture=%lu colours=%lu tiles=%lu rest=%lu\n",(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_colour*50UL),(unsigned long)(scenery_fine_tiles*50UL),(unsigned long)((scenery_fine_total-scenery_fine_capture-scenery_fine_colour-scenery_fine_tiles)*50UL));
  report_printf("R026 DIAG entries=%lu off=%lu hidden=%lu priority=%lu car=%lu passed=%lu frames_rows=%lu count=%u\n",(unsigned long)scenery_diag[0],(unsigned long)scenery_diag[1],(unsigned long)scenery_diag[2],(unsigned long)scenery_diag[3],(unsigned long)scenery_diag[4],(unsigned long)scenery_diag[5],(unsigned long)scenery_diag[6],(unsigned)osprites.sprite_count);
- report_printf("R031 PACKET reuses=%lu\n",(unsigned long)scenery_packet_reuses);
+ report_printf("R031 PACKET reuses=%lu partial_frames=%lu (sprites came or went=%lu) full: plan=%lu rows=%lu\n",(unsigned long)scenery_packet_reuses,(unsigned long)scenery_partial_frames,(unsigned long)scenery_full_why[0],(unsigned long)scenery_full_why[1],(unsigned long)scenery_full_why[2]);
  report_printf("R026 JOBS longs/frame start=%lu restart=%lu lines=%lu\n",(unsigned long)(scenery_frames?scenery_start_longs/scenery_frames:0),(unsigned long)(scenery_frames?scenery_restart_longs/scenery_frames:0),(unsigned long)(scenery_frames?scenery_line_longs/scenery_frames:0));
  report_printf("R026 SCENERY frames=%lu sprites avg=%lu max=%u dropped=%lu car_dropped=%lu shared=%lu reused=%lu bank_drops=%lu blocks_max=%u line_longs_max=%u overflow=%lu us total=%lu capture=%lu max=%lu\n",(unsigned long)scenery_frames,(unsigned long)(scenery_frames?scenery_count_total/scenery_frames:0),scenery_peak,(unsigned long)scenery_dropped_total,(unsigned long)scenery_car_dropped,(unsigned long)scenery_shared_total,(unsigned long)scenery_reused_total,(unsigned long)scenery_bank_drops,scenery_block_peak,scenery_line_peak,(unsigned long)scenery_overflow,(unsigned long)(scenery_fine_total*50UL),(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_max*50UL));
 #ifndef OR_X68K
