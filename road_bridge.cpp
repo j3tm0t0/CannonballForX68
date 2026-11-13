@@ -76,9 +76,9 @@ static void colors(const HWRoad&r,unsigned which,unsigned data,unsigned cw,unsig
 static const uint8_t*road_lines=0;
 // Rows of graphic page 1 currently holding road line n (-1 = off-road), per row set.
 static int16_t road_page_line[2][224];static bool road_page_init=false;
-#ifndef OR_X68K
-static uint8_t road_page[512*512];   // PC model of the page-1 classes
-#endif
+// PC: model of the page-1 classes. X68000 (r031k): a copy in main memory of what the page holds,
+// so a row is given only the bytes that differ from the line it held before.
+static uint8_t road_page[512*512];
 static int16_t line_min[256],line_max[256];
 static void road_line_bounds(const HWRoad&r){
  if(road_lines==r.roads)return;
@@ -219,9 +219,7 @@ void road_preview(const RoadFrame&f,uint16_t*out){
 void road_stream(const RoadFrame&f){
  if(!road_page_init){
   for(unsigned b=0;b<2;b++)for(unsigned y=0;y<224;y++)road_page_line[b][y]=-1;
-#ifndef OR_X68K
-  memset(road_page,3,sizeof road_page);
-#endif
+  memset(road_page,3,sizeof road_page);   // (X68000: platform_init fills the page with class 3)
   road_page_init=true;
  }
  unsigned set=f.gv_base?1:0;
@@ -231,11 +229,14 @@ void road_stream(const RoadFrame&f){
   const uint8_t*src=road_lines+l*512;
 #ifdef OR_X68K
   // upper byte of each 16-bit pixel = page 1; the lower byte (background) is not touched
+  // Neighbouring road lines differ in a few pixels (the edges move by one or two), and a GVRAM
+  // byte costs 0.47 us on the real bus: compared 4 pixels at a time with the copy, and only the
+  // bytes that differ are written.
   volatile uint8_t*dst=(volatile uint8_t*)(0xc00000UL+(f.gv_base+y)*1024UL);
-  for(unsigned x=0;x<512;x+=8){
-   dst[0]=0xf0|src[0];dst[2]=0xf0|src[1];dst[4]=0xf0|src[2];dst[6]=0xf0|src[3];
-   dst[8]=0xf0|src[4];dst[10]=0xf0|src[5];dst[12]=0xf0|src[6];dst[14]=0xf0|src[7];
-   dst+=16;src+=8;
+  uint8_t*have=road_page+(f.gv_base+y)*512;
+  for(unsigned x=0;x<512;x+=4){
+   if(*(const uint32_t*)(src+x)==*(const uint32_t*)(have+x))continue;
+   for(unsigned k=x;k<x+4;k++)if(have[k]!=src[k]){have[k]=src[k];dst[k*2]=0xf0|src[k];}
   }
 #else
   memcpy(road_page+(f.gv_base+y)*512,src,512);

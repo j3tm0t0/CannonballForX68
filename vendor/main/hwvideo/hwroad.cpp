@@ -189,25 +189,7 @@ void HWRoad::decode_road(const uint8_t* src_road)
 }
 
 // Writes go to RAM, but we read from the RAM Buffer.
-void HWRoad::write16(uint32_t adr, const uint16_t data)
-{
-    ram[(adr >> 1) & 0x7FF] = data;
-}
-
-void HWRoad::write16(uint32_t* adr, const uint16_t data)
-{
-    uint32_t a = *adr;
-    ram[(a >> 1) & 0x7FF] = data;
-    *adr += 2;
-}
-
-void HWRoad::write32(uint32_t* adr, const uint32_t data)
-{
-    uint32_t a = *adr;
-    ram[(a >> 1) & 0x7FF] = data >> 16;
-    ram[((a >> 1) + 1) & 0x7FF] = data & 0xFFFF;
-    *adr += 4;
-}
+// (Cannonball for x68: write16/write32 are inline in hwroad.hpp; the road code calls them for every word.)
 
 uint16_t HWRoad::read_road_control()
 {
