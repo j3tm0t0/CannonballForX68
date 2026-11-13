@@ -825,10 +825,22 @@ static uint32_t scenery_car_dropped=0,scenery_shared_total=0,scenery_frames=0,sc
 static unsigned scenery_peak=0,scenery_line_peak=0,scenery_block_peak=0;
 static uint32_t scenery_reuse_frames=0;   // r030
 uint32_t scenery_fine_total=0,scenery_fine_capture=0,scenery_fine_max=0,scenery_fine_colour=0,scenery_fine_tiles=0;
+// 64: what one line period (63.5 us) takes. A long written to the PCG with the sprite display on
+// costs about 1.1 us (XEiJ, IOSPEED line of the report), and with 96 a quarter of the job lists
+// finished after their tile row had begun (16 MHz, start scene); with 64 none did.
 #ifndef CBX68_BUDGET
-#define CBX68_BUDGET 96
+#define CBX68_BUDGET 64
 #endif
-static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;   // longs per raster interrupt (two patterns + registers)
+#ifndef CBX68_REWRITTEN_FIRST
+#define CBX68_REWRITTEN_FIRST 1
+#endif
+static const bool SCENERY_REWRITTEN_FIRST=CBX68_REWRITTEN_FIRST;
+#ifndef CBX68_DIFF
+#define CBX68_DIFF 1
+#endif
+static const bool SCENERY_DIFF=CBX68_DIFF;   // a pattern rewritten by a line job: only the longs that differ from what it held
+static uint32_t scenery_start_longs=0,scenery_restart_longs=0,scenery_line_longs=0;   // job list sizes, summed over the frames
+static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;   // longs per raster interrupt
 #ifndef OR_X68K
 static unsigned scenery_entry_list[256],scenery_entry_count=0;
 static uint64_t scenery_dropped_pixels=0,scenery_pixels_total=0,scenery_shadow_pixels=0;
@@ -843,7 +855,7 @@ static uint32_t scenery_ref(SceneryPacket&S,unsigned off){
  (void)S;return off+1;
 #endif
 }
-struct SceneryJob{int16_t line;uint8_t pcg;uint8_t pad;uint16_t res,sprite;};
+struct SceneryJob{int16_t line;uint8_t pcg;uint8_t pad;uint16_t res,sprite;uint32_t mask;};   // mask: the longs of the pattern to write
 #ifdef OR_X68K
 extern "C" uint32_t scenery_tile_finish(uint16_t*src,uint32_t rowbits,const uint32_t*rowLR,uint32_t*enc);
 extern "C" void scenery_tile_split(uint16_t*src,uint32_t rowbits,uint32_t**encp);
@@ -856,7 +868,7 @@ static uint32_t asm_check[8];static uint8_t chk_met[256];   // rows: calls, colo
 #endif
 static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,const HudPacket&hud,bool sprites_on){
  S.count=S.kept=S.dropped=S.blocks=S.dropped_banks=S.reused=S.line_longs_max=S.shared=S.car_dropped=0;
- S.start_job=0;memset(S.line_job,0,sizeof S.line_job);
+ S.start_job=S.restart_job=0;memset(S.line_job,0,sizeof S.line_job);
  const bool car_hw=!car.overflow&&!car.text_mode;
  const unsigned car_sprites=car_hw?car.count:0,car_patterns=car_hw?car.patterns:0,car_blocks=car_hw?car.palettes:0;
  S.first_block=3+car_blocks;scenery_palette=pal;
@@ -1148,9 +1160,14 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  static int16_t p_chain_head[64],p_chain_next[256];for(unsigned b=0;b<64;b++)p_chain_head[b]=-1;
  auto chain_of=[](uint32_t h)->unsigned{return (h^(h>>6)^(h>>12)^(h>>18)^(h>>24))&63;};
  unsigned fresh_s=0,fresh_p=0;
- static uint16_t sq[256],pq[512];static int8_t pq_last[512];unsigned sq_h=0,sq_t=0,pq_h=0,pq_t=0;
+ static uint16_t sq[256];unsigned sq_h=0,sq_t=0;
+ // Patterns free for another tile, oldest first, in two queues: [0] those a line job has already
+ // rewritten in this frame, [1] those still holding their start state. [0] is asked first, so the
+ // rewriting stays on few patterns and the others need no reload when the frame is shown again.
+ static uint16_t pq[2][512];static int8_t pq_last[2][512];unsigned pq_h[2]={0,0},pq_t[2]={0,0};
  int room4=0,room34=0;
  static uint16_t line_load[SCENERY_LINES];memset(line_load,0,sizeof line_load);
+ static uint8_t s_rewritten[128],p_rewritten[256];memset(s_rewritten,0,sizeof s_rewritten);memset(p_rewritten,0,sizeof p_rewritten);   // has a line job
  // r027: text palette of each score/time band after the first, in the empty text row above it
  static int16_t hud_line[28];
  for(unsigned b=1;b<hud.bands;b++){hud_line[b]=int16_t(hud.band_first[b]*8-4);line_load[hud_line[b]]+=10;}
@@ -1180,6 +1197,10 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  }
  auto pcg_of=[&](unsigned u)->const uint32_t*{return u>=SCENERY_MAX?car_pcg32[u-SCENERY_MAX]:S.pcg[u];};
  auto content_id=[&](unsigned u)->int{return u>=SCENERY_MAX?int(SCENERY_MAX+car.pattern_index[u-SCENERY_MAX]):int(u);};
+ // the longs that differ between two patterns, and what writing them costs (2 a run + the data)
+ // A mask in many short runs can cost more than the whole pattern (34): then the whole pattern.
+ auto mask_cost=[](uint32_t m)->unsigned{return unsigned(__builtin_popcount(m))+2u*unsigned(__builtin_popcount(m&~(m<<1)));};
+ auto diff_mask=[&](const uint32_t*a,const uint32_t*b)->uint32_t{uint32_t m=0;for(int q=31;q>=0;q--)m=(m<<1)|uint32_t(a[q]!=b[q]);return mask_cost(m)>34?0xffffffffu:m;};
  S.car_dropped=0;
  for(unsigned q=0;q<nu;q++){const unsigned u=users[q];const bool is_car=u>=SCENERY_MAX;
   const int r=is_car?int(car.registers[u-SCENERY_MAX][1]-16)/16:S.sprite[u].row;
@@ -1194,65 +1215,91 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   for(int k=p_chain_head[chain_of(hash)];k>=0;k=p_chain_next[k])
    if(p_hash[k]==hash&&(pn<0||k<pn)&&!memcmp(pcg_of(unsigned(p_content[k])),mine,128)){pn=k;shared=true;}
   if(pn<0&&fresh_p<nP)pn=int(fresh_p);
+  // oldest first; one whose last row grew by sharing goes to the back again
+  auto peek=[&](unsigned q)->int{
+   for(unsigned guard=0;pq_h[q]!=pq_t[q]&&guard<512;guard++){const unsigned k=pq[q][pq_h[q]&511];
+    if(p_last[k]!=pq_last[q][pq_h[q]&511]){pq[q][pq_t[q]&511]=uint16_t(k);pq_last[q][pq_t[q]&511]=p_last[k];++pq_t[q];++pq_h[q];continue;}
+    return p_last[k]<=r-2?int(k):-1;}
+   return -1;};
+  uint32_t pmask=0xffffffffu;unsigned pneed=34;
+  int cand[2]={-1,-1};
+  if(pn<0){cand[0]=SCENERY_REWRITTEN_FIRST?peek(0):-1;cand[1]=peek(1);}
+  auto drop=[&]{if(is_car){++S.car_dropped;car.registers[u-SCENERY_MAX][3]=0;}else ++S.dropped;};
+  if((!is_car&&sn<0)||(pn<0&&cand[0]<0&&cand[1]<0)){drop();continue;}
+  int ls=-1,lp=-1,from_q=-1;const int z=16*r-3;
+  if(sre){ls=find_line(16*(s_last[sn]+1)+3,z,4,room4);if(ls<0){drop();continue;}line_load[ls]+=4;}
   if(pn<0){
-   // oldest first; one whose last row grew by sharing goes to the back again
-   for(unsigned guard=0;pq_h!=pq_t&&guard<512&&pn<0;guard++){unsigned k=pq[pq_h&511];
-    if(p_last[k]!=pq_last[pq_h&511]){pq[pq_t&511]=uint16_t(k);pq_last[pq_t&511]=p_last[k];++pq_t;++pq_h;continue;}
-    if(p_last[k]<=r-2){pn=int(k);pre=true;}else break;}
+   for(unsigned q=0;q<2&&pn<0;q++){if(cand[q]<0)continue;
+    const uint32_t m=SCENERY_DIFF?diff_mask(pcg_of(unsigned(p_content[cand[q]])),mine):0xffffffffu;const unsigned need=mask_cost(m);
+    int no_ptr=0;lp=find_line(16*(p_last[cand[q]]+1)+3,z,need,need>=34?room34:no_ptr);
+    if(lp>=0){pn=cand[q];pre=true;from_q=int(q);pmask=m;pneed=need;}}
+   if(pn<0){if(sre)line_load[ls]-=4;drop();continue;}
+   line_load[lp]+=pneed;
   }
-  if((!is_car&&sn<0)||pn<0){if(is_car){++S.car_dropped;car.registers[u-SCENERY_MAX][3]=0;}else ++S.dropped;continue;}
-  int ls=-1,lp=-1;
-  if(sre||pre){
-   const int z=16*r-3;
-   if(sre)ls=find_line(16*(s_last[sn]+1)+3,z,4,room4);
-   if(sre&&ls<0){if(is_car){++S.car_dropped;car.registers[u-SCENERY_MAX][3]=0;}else ++S.dropped;continue;}
-   if(sre)line_load[ls]+=4;
-   if(pre)lp=find_line(16*(p_last[pn]+1)+3,z,34,room34);
-   if(pre&&lp<0){if(sre)line_load[ls]-=4;if(is_car){++S.car_dropped;car.registers[u-SCENERY_MAX][3]=0;}else ++S.dropped;continue;}
-   if(pre)line_load[lp]+=34;
-   ++S.reused;
-  }
+  if(sre||pre){++S.reused;if(sre)s_rewritten[sn]=1;if(pre)p_rewritten[pn]=1;}
   if(!shared&&!pre)fresh_p=std::max(fresh_p,unsigned(pn)+1);
   if(!is_car&&!sre)fresh_s=std::max(fresh_s,unsigned(sn)+1);
-  if(pre)++pq_h;                                   // taken from the head
+  if(pre)++pq_h[from_q];                           // taken from the head
   if(sre)++sq_h;
   if(!is_car){sq[sq_t&255]=uint16_t(sn);++sq_t;}
-  if(!shared){pq[pq_t&511]=uint16_t(pn);pq_last[pq_t&511]=int8_t(std::max<int>(p_last[pn]==-100?r:p_last[pn],r));++pq_t;}
+  if(!shared){const unsigned q=SCENERY_REWRITTEN_FIRST&&p_rewritten[pn]?0:1;pq[q][pq_t[q]&511]=uint16_t(pn);pq_last[q][pq_t[q]&511]=int8_t(std::max<int>(p_last[pn]==-100?r:p_last[pn],r));++pq_t[q];}
   p_last[pn]=int8_t(std::max<int>(p_last[pn],r));p_of[u]=uint16_t(pn);
   if(!shared){
    if(p_content[pn]>=0){int16_t*at=&p_chain_head[chain_of(p_hash[pn])];while(*at!=int16_t(pn))at=&p_chain_next[*at];*at=p_chain_next[pn];}
    p_content[pn]=int16_t(u);p_hash[pn]=hash;
    {const unsigned c=chain_of(hash);p_chain_next[pn]=p_chain_head[c];p_chain_head[c]=int16_t(pn);}
-   jobs[njobs++]={int16_t(lp),1,0,uint16_t(pn),uint16_t(u)};}
+   jobs[njobs++]={int16_t(lp),1,0,uint16_t(pn),uint16_t(u),pmask};}
   else ++S.shared;
   if(is_car){unsigned i=u-SCENERY_MAX;car.registers[i][2]=uint16_t((car.registers[i][2]&0xff00)|(car_pattern_slot(pn)&255));}
-  else{s_last[sn]=int8_t(r);S.sprite[u].kept=1;++S.kept;jobs[njobs++]={int16_t(ls),0,0,uint16_t(sn),uint16_t(u)};}
+  else{s_last[sn]=int8_t(r);S.sprite[u].kept=1;++S.kept;jobs[njobs++]={int16_t(ls),0,0,uint16_t(sn),uint16_t(u),0};}
  }
  // 5. job lists: vertical blank first, then one list per raster interrupt
  unsigned off=0;
- auto emit=[&](const SceneryJob&j){
+ auto emit=[&](const SceneryJob&j,uint32_t m){
+  if(off+300>SCENERY_JOB_LONGS){++scenery_overflow;return;}   // never past the buffer (room for a job and the list ends)
   if(!j.pcg){const ScenerySprite&sp=S.sprite[j.sprite];unsigned n=car_sprites+j.res,pattern=car_pattern_slot(p_of[j.sprite]);
    S.jobs[off++]=0xeb0000UL+n*8;S.jobs[off++]=1;
    S.jobs[off++]=(uint32_t(uint16_t(sp.x))<<16)|uint16_t(sp.y);
    S.jobs[off++]=(uint32_t(((S.first_block+sp.block)<<8)|(pattern&255))<<16)|3u;}
   else{unsigned pattern=car_pattern_slot(j.res);const uint32_t*p=pcg_of(j.sprite);
-   S.jobs[off++]=0xeb8000UL+pattern*128;S.jobs[off++]=31;
-   memcpy(S.jobs+off,p,128);off+=32;}
+   uint32_t*d=S.jobs+off;const uint32_t at=0xeb8000UL+pattern*128;
+   if(m==0xffffffffu){*d++=at;*d++=31;for(unsigned q=0;q<32;q++)*d++=p[q];}
+   else for(unsigned q=0;m;){
+    while(!(m&1)){m>>=1;++q;}
+    uint32_t*const head=d;d+=2;const unsigned first=q;
+    do{*d++=p[q++];m>>=1;}while(m&1);
+    head[0]=at+first*4;head[1]=q-first-1;}
+   off=unsigned(d-S.jobs);}
  };
  static int16_t head[SCENERY_LINES+1],next_job[2*(SCENERY_MAX+128)];
  for(unsigned l=0;l<=SCENERY_LINES;l++)head[l]=-1;
  for(int k=int(njobs)-1;k>=0;k--){unsigned l=jobs[k].line<0?SCENERY_LINES:unsigned(jobs[k].line);next_job[k]=head[l];head[l]=int16_t(k);}
- auto emit_pal=[&](unsigned b){S.jobs[off++]=0xe82200UL;S.jobs[off++]=7;for(unsigned q=0;q<8;q++)S.jobs[off++]=(uint32_t(hud.band_pal[b][q*2])<<16)|hud.band_pal[b][q*2+1];};
- S.start_job=scenery_ref(S,off);
+ auto emit_pal=[&](unsigned b){if(off+300>SCENERY_JOB_LONGS){++scenery_overflow;return;}S.jobs[off++]=0xe82200UL;S.jobs[off++]=7;for(unsigned q=0;q<8;q++)S.jobs[off++]=(uint32_t(hud.band_pal[b][q*2])<<16)|hud.band_pal[b][q*2+1];};
+ const unsigned first_off=off;S.start_job=scenery_ref(S,off);
  if(hud.active&&hud.bands)emit_pal(0);
- for(int k=head[SCENERY_LINES];k>=0;k=next_job[k])emit(jobs[k]);
+ for(int k=head[SCENERY_LINES];k>=0;k=next_job[k])emit(jobs[k],0xffffffffu);
  S.jobs[off++]=0;
+ scenery_start_longs+=off-first_off;
+ const unsigned line_off=off;
  for(unsigned l=0;l<224;l++){if(!line_load[l])continue;
   S.line_job[l]=scenery_ref(S,off);
   for(unsigned b=1;b<hud.bands;b++)if(hud_line[b]==int(l))emit_pal(b);
-  for(int k=head[l];k>=0;k=next_job[k])emit(jobs[k]);
+  for(int k=head[l];k>=0;k=next_job[k])emit(jobs[k],jobs[k].mask);
   S.jobs[off++]=0;
   S.line_longs_max=std::max<unsigned>(S.line_longs_max,line_load[l]);}
+ scenery_line_longs+=off-line_off;
+ // The start state again after a complete pass of the line jobs (the same frame shown once
+ // more): only the sprite numbers and patterns a line job has written, and of a pattern only
+ // the longs that differ from what its last line job left.
+ if(off+4096<=SCENERY_JOB_LONGS){
+  const unsigned restart_off=off;S.restart_job=scenery_ref(S,off);
+  if(hud.active&&hud.bands>1)emit_pal(0);
+  for(int k=head[SCENERY_LINES];k>=0;k=next_job[k]){const SceneryJob&j=jobs[k];
+   if(!j.pcg){if(s_rewritten[j.res])emit(j,0);}
+   else if(p_rewritten[j.res])emit(j,SCENERY_DIFF?diff_mask(pcg_of(unsigned(p_content[j.res])),pcg_of(j.sprite)):0xffffffffu);}
+  S.jobs[off++]=0;
+  scenery_restart_longs+=off-restart_off;
+ }else{S.restart_job=S.start_job;scenery_restart_longs+=line_off-first_off;}
  (void)content_id;
 }
 #if defined(OR_X68K)&&defined(CBX68_TRACE)
@@ -1279,7 +1326,7 @@ static void build_scenery(SceneryPacket&S,const uint16_t*pal,CarPacket&car,const
 }
 // Raster/vblank side. scenery_scan points at the job pointer of the next raster interrupt.
 static uint32_t scenery_zero[SCENERY_LINES];
-extern "C" {volatile uint32_t scenery_scan=0;volatile uint16_t scenery_owed=0,scenery_owed_max=0;volatile uint8_t scenery_busy=0,scenery_gen=0;void scenery_vblank(const RoadRow*rows);}
+extern "C" {volatile uint32_t scenery_scan=0;volatile uint16_t scenery_owed=0,scenery_owed_max=0;volatile uint32_t scenery_late_lines=0,scenery_missed=0;volatile uint16_t scenery_line=0;volatile uint8_t scenery_busy=0,scenery_gen=0;void scenery_vblank(const RoadRow*rows);}
 static void scenery_run(const uint32_t*j){
  while(uint32_t dst=*j++){uint32_t n=*j++ +1;
 #ifdef OR_X68K
@@ -1295,26 +1342,47 @@ static uint32_t irq_hist[16],irq_hist_last=0;   // frames by raster interrupts t
 #endif
 #ifdef OR_X68K
 extern RoadRow* volatile road_scan;
+extern "C"{RoadRow* volatile road_scan_end=0;volatile uint8_t scenery_unfinished=0,scenery_dirty=0;}   // set by road_vblank_irq: where the last pass ended
+static const RoadRow*vblank_rows=0;static bool vblank_state_ok=false;static uint32_t scenery_restarts=0,scenery_skipped_blanks=0;
 #endif
-// Runs in the vertical blank interrupt with the raster interrupts enabled (road_irq.S); the
+// Runs at interrupt mask 5 with the raster interrupts enabled (road_irq.S: from the vertical
+// blank interrupt, or from the raster interrupt whose job loop that blank found running); the
 // caller has set scenery_scan to 0, so no line job runs while the start state is loaded.
 extern "C" void scenery_vblank(const RoadRow*rows){
 #if defined(OR_X68K)&&defined(CBX68_TRACE)
  {const uint32_t n=road_irq_count,d=n-irq_hist_last;irq_hist_last=n;++irq_hist[d>=240?15:d>>4];}
 #endif
+#ifdef OR_X68K
+ if(!rows){vblank_rows=0;return;}
+#else
  if(!rows)return;
+#endif
  const RoadFrame*f=(const RoadFrame*)rows;
- if(!(f->visual.flags&2)&&!f->visual.hud.active)return;
+ if(!(f->visual.flags&2)&&!f->visual.hud.active){
+#ifdef OR_X68K
+  vblank_rows=0;
+#endif
+  return;}
  const SceneryPacket&S=f->visual.scenery;
 #ifdef OR_X68K
- if(S.start_job)scenery_run((const uint32_t*)S.start_job);
-#endif
-#ifdef OR_X68K
- // continue at the line the raster interrupts have reached (line 0 unless the blank's work ran long)
+ // The same frame again, and its last pass ran every line job on the state this function left:
+ // the sprite numbers and patterns no line job touches still hold the start state.
+ const bool dirty=scenery_dirty;scenery_dirty=0;   // a blank that came during the last blank's work cut that pass off
+ const bool again=rows==vblank_rows&&vblank_state_ok&&!dirty&&!scenery_unfinished&&road_scan_end==rows+224;
+ vblank_rows=rows;vblank_state_ok=false;
+ if(again){if(S.restart_job)scenery_run((const uint32_t*)S.restart_job);++scenery_restarts;}
+ else if(S.start_job)scenery_run((const uint32_t*)S.start_job);
+ // The line jobs start at line 0. When the blank's work ran long, the raster interrupts have
+ // already passed some lines: those are owed, and the loop of the next raster interrupt writes
+ // their lists first, late but in order (a pattern job holds only the longs that differ from
+ // what the job before it left, so none may be left out).
  {uint16_t sr;__asm__ volatile("move.w %%sr,%0\n ori.w #0x0700,%%sr":"=d"(sr));
   const unsigned done=unsigned((const RoadRow*)road_scan-rows);
-  scenery_scan=done<SCENERY_LINES?(uint32_t)(uintptr_t)(S.line_job+done):0;scenery_owed=0;
-  __asm__ volatile("move.w %0,%%sr"::"d"(sr));}
+  scenery_scan=(uint32_t)(uintptr_t)S.line_job;scenery_owed=uint16_t(done<224?done:224);scenery_line=0;
+  __asm__ volatile("move.w %0,%%sr"::"d"(sr));
+  bool late=false;for(unsigned l=0;l<done&&l<224&&!late;l++)if(S.line_job[l])late=true;
+  if(late)++scenery_skipped_blanks;
+  vblank_state_ok=true;}
 #else
  scenery_scan=(uint32_t)(uintptr_t)S.line_job;
 #endif
@@ -1347,6 +1415,10 @@ static void scenery_preview(const RoadFrame&f,uint16_t*out){
   for(int yy=0;yy<16;yy++)for(int xx=0;xx<16;xx++){int x=tx+xx,y=ty+yy;if(x<0||x>=320||y<0||y>=224)continue;
    unsigned b=car.pcg[car.pattern_index[i]][((xx>>3)*2+(yy>>3))*32+(yy&7)*4+((xx&7)>>1)],n=xx&1?b&15:b>>4;
    if(n)expected[y*320+x]=car.palette[slot][n]|0x10000u;}}
+ for(unsigned pass=0;pass<2;pass++){
+ if(pass){   // the same frame shown again: only the restart part of the start state
+  for(unsigned i=0;i<320*224;i++)if(shown[i]!=expected[i]){fprintf(stderr,"SCENERY FAIL raster x=%u y=%u\n",i%320,i/320);std::exit(16);}
+  memset(shown,0,sizeof shown);run(S.restart_job);}
  for(unsigned y=0;y<224;y++){
   run(S.line_job[y]);
   for(int n=127;n>=0;n--){if(!reg[n][3])continue;int top=int(reg[n][1])-16;if(int(y)<top||int(y)>=top+16)continue;
@@ -1356,6 +1428,7 @@ static void scenery_preview(const RoadFrame&f,uint16_t*out){
    for(unsigned xx=0;xx<16;xx++){int x=int(reg[n][0])-16+int(xx);if(x<0||x>=320)continue;
     unsigned b=pcg[pattern*128+((xx>>3)*2+(yy>>3))*32+(yy&7)*4+((xx&7)>>1)],v=xx&1?b&15:b>>4;
     if(v)shown[y*320+x]=(is_car?car.palette[block-3][v]:S.palette[block-S.first_block][v])|0x10000u;}}
+ }
  }
  for(unsigned i=0;i<320*224;i++){
   if(shown[i]!=expected[i]){fprintf(stderr,"SCENERY FAIL raster x=%u y=%u\n",i%320,i/320);std::exit(16);}
@@ -1657,11 +1730,12 @@ void visuals_print(){
  report_printf("ASM CHECK tile_rows calls=%lu to_c=%lu mismatches=%lu finish calls=%lu mismatches=%lu split calls=%lu mismatches=%lu\n",(unsigned long)asm_check[0],(unsigned long)asm_check[1],(unsigned long)asm_check[2],(unsigned long)asm_check[3],(unsigned long)asm_check[4],(unsigned long)asm_check[5],(unsigned long)asm_check[6]);
 #endif
 #ifdef CBX68_TRACE
- report_printf("TRACE irqs/frame");for(unsigned k=0;k<16;k++)report_printf(" %lu",(unsigned long)irq_hist[k]);report_printf(" lag_max=%u\n",(unsigned)scenery_owed_max);
+ report_printf("TRACE irqs/frame");for(unsigned k=0;k<16;k++)report_printf(" %lu",(unsigned long)irq_hist[k]);report_printf("\nTRACE jobs lag_max=%u late_lines=%lu missed_lists=%lu restarts=%lu late_blanks=%lu\n",(unsigned)scenery_owed_max,(unsigned long)scenery_late_lines,(unsigned long)scenery_missed,(unsigned long)scenery_restarts,(unsigned long)scenery_skipped_blanks);
  {FILE*tf=fopen("FRAMES.BIN","wb");if(tf){fwrite(frame_trace,12,frame_trace_n,tf);fclose(tf);}}
 #endif
  report_printf("R026 PHASES us capture=%lu colours=%lu tiles=%lu rest=%lu\n",(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_colour*50UL),(unsigned long)(scenery_fine_tiles*50UL),(unsigned long)((scenery_fine_total-scenery_fine_capture-scenery_fine_colour-scenery_fine_tiles)*50UL));
  report_printf("R026 DIAG entries=%lu off=%lu hidden=%lu priority=%lu car=%lu passed=%lu frames_rows=%lu count=%u\n",(unsigned long)scenery_diag[0],(unsigned long)scenery_diag[1],(unsigned long)scenery_diag[2],(unsigned long)scenery_diag[3],(unsigned long)scenery_diag[4],(unsigned long)scenery_diag[5],(unsigned long)scenery_diag[6],(unsigned)osprites.sprite_count);
+ report_printf("R026 JOBS longs/frame start=%lu restart=%lu lines=%lu\n",(unsigned long)(scenery_frames?scenery_start_longs/scenery_frames:0),(unsigned long)(scenery_frames?scenery_restart_longs/scenery_frames:0),(unsigned long)(scenery_frames?scenery_line_longs/scenery_frames:0));
  report_printf("R026 SCENERY frames=%lu sprites avg=%lu max=%u dropped=%lu car_dropped=%lu shared=%lu reused=%lu bank_drops=%lu blocks_max=%u line_longs_max=%u overflow=%lu us total=%lu capture=%lu max=%lu\n",(unsigned long)scenery_frames,(unsigned long)(scenery_frames?scenery_count_total/scenery_frames:0),scenery_peak,(unsigned long)scenery_dropped_total,(unsigned long)scenery_car_dropped,(unsigned long)scenery_shared_total,(unsigned long)scenery_reused_total,(unsigned long)scenery_bank_drops,scenery_block_peak,scenery_line_peak,(unsigned long)scenery_overflow,(unsigned long)(scenery_fine_total*50UL),(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_max*50UL));
 #ifndef OR_X68K
  report_printf("R026 SCENERY pixels total=%llu dropped=%llu shadow_undarkened=%llu\n",(unsigned long long)scenery_pixels_total,(unsigned long long)scenery_dropped_pixels,(unsigned long long)scenery_shadow_pixels);
