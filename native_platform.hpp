@@ -15,6 +15,8 @@ void road_vblank_irq();void road_raster_irq();
 RoadRow* volatile road_active=0;
 RoadRow* volatile road_pending=0;
 RoadRow* volatile road_scan=0;
+// r031f: where the raster interrupt reads RoadFrame::row_changed (set with road_scan at the vertical blank)
+extern "C"{uint16_t* volatile road_mask_scan=0;uint32_t road_mask_offset=uint32_t(offsetof(RoadFrame,row_changed));}
 volatile uint32_t road_vblanks=0,road_shown=0,road_irq_count=0;
 extern "C"{volatile uint8_t road_vblank_busy=0;volatile uint32_t road_vblank_overruns=0;}
 static uint32_t io_probe_ns[5],io_probe_n[5],pcg_long_ns=0;
@@ -22,6 +24,25 @@ extern "C"{extern volatile uint8_t audio_hold;extern volatile uint32_t audio_tic
 #ifdef CBX68_AUDIO_LOG
 extern "C"{extern uint32_t audio_log[];extern volatile uint32_t audio_log_n;}
 #endif
+// MPU caches (main.cpp calls native_cache_on at the start, platform_exit puts the state back).
+// Asked through IOCS _SYS_STAT (d1=3 reads the state: bit 0 instruction, bit 1 data; d1=4 sets it
+// from d2), which the X68030 ROM and the 68060 accelerator's driver provide. Without them the call
+// fails and nothing is touched: turning the caches on in the CACR by hand would also cache the I/O
+// area when nobody has set the MMU or the transparent translation registers up for it.
+static int native_cache_before=-1;static bool native_cache_set=false,native_cache_was_set=false;
+static long native_sys_stat(long mode,long value){
+ register long d0 __asm__("d0")=0xac;register long d1 __asm__("d1")=mode;register long d2 __asm__("d2")=value;
+ __asm__ volatile("trap #15":"+d"(d0),"+d"(d1),"+d"(d2)::"memory");
+ return d0;
+}
+static void native_cache_on(){
+ native_cache_before=int(native_sys_stat(3,0));
+ if(native_cache_before>=0&&(native_cache_before&3)!=3){native_sys_stat(4,3);native_cache_set=native_cache_was_set=true;}
+}
+static void native_cache_restore(){
+ if(!native_cache_set)return;
+ native_sys_stat(4,native_cache_before&3);native_cache_set=false;
+}
 static int native_audio_game=1;   // main.cpp: 0 for the display test (no ROMs, no sound program)
 #ifdef CBX68_PROF
 // sampling profiler (road_irq.S): hits per 16 bytes of text, last bucket = outside the program
@@ -109,7 +130,7 @@ static void platform_init(){
  if(native_hz60)HW16(0xe80008)=524;   // r029 HZ60: R04 vertical total 525 lines: 31.5 kHz / 525 = 60 Hz (display lines 72..520 unchanged)
  HW16(0xe80012)=1023;HW16(0xe82400)=1;HW16(0xe82500)=0x06e4;HW16(0xe82600)=0x004f;
  for(unsigned a=0xe80014;a<=0xe80026;a+=2)HW16(a)=0;
- road_build(hwroad,display_palette,road_frames[0]);road_stream(road_frames[0]);road_active=road_frames[0].rows;
+ road_build(hwroad,display_palette,road_frames[0]);road_stream(road_frames[0]);road_rows_changed(road_frames[0]);road_active=road_frames[0].rows;
  audio_start(native_audio_game);   // r031: FM chip (needs supervisor mode); not in the display test
  unsigned short sr=mask_irqs();
  saved_vblank=*(volatile uint32_t*)0x134;saved_raster=*(volatile uint32_t*)0x138;
@@ -217,6 +238,7 @@ static void platform_exit(){
  for(unsigned i=0;i<16384;i++)HW16(0xeb8000UL+i*2)=0;
  // r027b: the score etc. use all 4 text planes; the console clears only its own
  for(unsigned p=0;p<4;p++)for(unsigned i=0;i<512*64;i++)HW16(0xe00000UL+p*0x20000UL+i*2)=0;
+ native_cache_restore();
  restore_irqs(sr);_iocs_crtmod(native_old_mode);_iocs_sp_off();_iocs_b_curon();for(unsigned i=0;i<16;i++)HW16(0xe82200UL+i*2)=saved_text_palette[i];_iocs_b_clr_al();_iocs_b_locate(0,0);if(native_ssp>0)_iocs_b_super(native_ssp);
  report_pager_start();   // r028: stop at each full screen
 
@@ -238,6 +260,7 @@ static void platform_exit(){
  report_printf("bg_columns=%lu car_frames=%lu car_tiles=%lu max_tiles=%u max_patterns=%u max_line=%u overflow=%lu\n",(unsigned long)background_columns,(unsigned long)car_frames,(unsigned long)car_tiles_total,car_peak_tiles,car_peak_patterns,car_peak_line,(unsigned long)car_overflows);
  report_printf("car_text_frames=%lu\n",(unsigned long)car_text_frames);
  report_printf("shown_x1000=%lu\n",t?road_shown*100000UL/t:0);
+ report_printf("MPU cache at start=%d%s (-1: no cache control in this system, 3: both on)\n",native_cache_before,native_cache_was_set?", turned on by this program":"");
  report_printf("IOSPEED ns/long ram=%lu pcg=%lu bg=%lu pal=%lu crtc=%lu\n",(unsigned long)io_probe_ns[0],(unsigned long)io_probe_ns[1],(unsigned long)io_probe_ns[2],(unsigned long)io_probe_ns[3],(unsigned long)io_probe_ns[4]);
  report_printf("LINE BUDGET longs=%u (pcg ns/long at start=%lu)\n",visuals_line_budget(),(unsigned long)pcg_long_ns);
  report_printf("vblanks=%lu raster_irqs=%lu vblank_overruns=%lu\n",(unsigned long)road_vblanks,(unsigned long)road_irq_count,(unsigned long)road_vblank_overruns);

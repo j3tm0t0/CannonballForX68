@@ -1803,7 +1803,9 @@ extern "C" void visuals_native_commit(const RoadFrame*f){
  *(volatile uint16_t*)0xe82500=(c.text_mode||hud.active)?0x12e4:0x06e4;
  if(hud.active){*(volatile uint16_t*)0xe80014=0;*(volatile uint16_t*)0xe80016=0;}   // text palette: scenery job lists
  for(unsigned i=0;i<128;i++)*(volatile uint16_t*)(0xeb0006UL+i*8)=0;
- *(volatile uint16_t*)0xe82600=f->rows[0].control;
+ // (0xe82600 is written by the raster interrupt of line 0, which is armed before this runs; a
+ //  write here could land after a later line has changed it, and lines that keep the value do
+ //  not write it again)
  // r026: palette blocks of the roadside objects (after the car's blocks)
  if(f->visual.flags&2){const SceneryPacket&S=f->visual.scenery;for(unsigned b=0;b<S.blocks;b++)for(unsigned n=1;n<16;n++)*(volatile uint16_t*)(0xe82200UL+(S.first_block+b)*32+n*2)=opaque_colour(S.palette[b][n]);}
  if(!(f->visual.flags&2)||c.overflow)return;

@@ -45,6 +45,16 @@ int main(int argc,char**argv) {
     puts("Cannonball for x68 v0.2 - unofficial X68000 port by Mattsuan-Z@ColtMaz");
     puts("Based on Cannonball (OutRun engine) by Chris White and the Cannonball team");
     puts("OutRun is a trademark of SEGA. Not affiliated with SEGA or the Cannonball team. ROMs not included.");fflush(stdout);
+#ifdef OR_X68K
+    // The MPU caches: on a 68030 and above the program is many times slower with them off, and they
+    // are off when no driver has turned them on (a 68060 accelerator without its driver). They are
+    // turned on here (IOCS _SYS_STAT), and what was found is put back at the end (platform_exit).
+    native_cache_on();
+    atexit(native_cache_restore);   // also on the early exits (missing ROMs ...); platform_exit calls it too
+    if(native_cache_before<0)puts("MPU cache: this system has no cache control (IOCS _SYS_STAT); if this is a 68030 or above, the game is much slower with the caches off.");
+    else printf("MPU cache: was %d%s\n",native_cache_before,native_cache_was_set?", turned on":"");
+    fflush(stdout);
+#endif
     // Cannonball for x68: "CBX68 TEST" = display test without ROMs (PC: 2nd argument = frames)
 #ifdef OR_X68K
     // r029: VSYNC (default) / CLOCK / HZ60 anywhere after the first argument choose the frame pacing (native_platform.hpp)
@@ -332,6 +342,7 @@ int main(int argc,char**argv) {
 #endif
 #ifdef OR_X68K
             native_phase_record(1,phase_start);phase_start=native_clock();
+            road_rows_changed(road_frame);   // r031f: the raster interrupt writes only what differs from the line before
             platform_road_submit(road_frame);
             native_phase_record(2,phase_start);
 #else
