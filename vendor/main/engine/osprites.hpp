@@ -148,6 +148,9 @@ public:
 
 	// Denote whether to swap sprite ram
 	bool do_sprite_swap;
+	// Cannonball for x68: the pending palette copies are done on every step, also when the sprite
+	// RAM is not exchanged because the step's picture is skipped (finalise_sprites)
+	bool do_palette_copy = false;
 
 	// Store the next available sprite colour palette (0 - 7F)
 	uint8_t spr_col_pal;

@@ -144,8 +144,12 @@ void OSprites::update_sprites()
 	{
         do_sprite_swap = false;
         video.sprite_layer->swap();
-        copy_palette_data();
 	}
+    if (do_palette_copy)
+    {
+        do_palette_copy = false;
+        copy_palette_data();
+    }
 }
 
 // Disable All Sprite Entries
@@ -520,6 +524,7 @@ void OSprites::finalise_sprites()
     // Ready to swap buffer and blit
     if (!cannonball::skip_render)
         do_sprite_swap = true;
+    do_palette_copy = true;
 }
 
 // Copy Sprite Data to Sprite RAM 
