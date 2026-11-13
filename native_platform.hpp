@@ -131,6 +131,20 @@ static void platform_init(){
  native_started=native_clock();native_frames=0;
  fine_start=fine_phase_start=platform_fine_clock();
 }
+// Picture skipping: the game does one step a screen refresh (VSYNC pace). When drawing has put
+// it 2 or more refreshes behind, the next picture is left out (the step itself still runs), at
+// most 5 in a row so the screen keeps changing. Far behind (a long pause), the count starts again.
+static int native_skip_mode=-1,native_lag=0;static uint32_t native_skipped_draws=0;
+static bool platform_draw_due(int frame){
+ static uint32_t v0=0;static int f0=0;static bool started=false;static unsigned row=0;
+ const uint32_t v=road_vblanks;
+ if(!started){v0=v;f0=frame;started=true;}
+ const int lag=int(v-v0)-(frame-f0);native_lag=lag;
+ if(lag>60||lag<-60){v0=v;f0=frame;row=0;native_lag=0;return true;}
+ if(lag<0){v0=v;f0=frame;native_lag=0;}                    // ahead (platform_sync waits): no credit is saved
+ if(lag>=2&&row<5){++row;++native_skipped_draws;return false;}
+ row=0;return true;
+}
 static void platform_sync(int frame){
  // Use one display period as the deadline; never repay old missed periods.
  static uint32_t deadline=0;static bool previous30=true;
@@ -139,6 +153,7 @@ static void platform_sync(int frame){
  if(native_vsync_pace){   // r029: count screen refreshes instead of the clock
   static uint32_t vdeadline=0;static bool vprevious30=true;static bool vstarted=false;
   const uint32_t v=road_vblanks;
+  if(native_skip_mode>0&&native_lag>0){vstarted=false;return;}   // behind: no waiting, the game catches up
   if(!vstarted||vprevious30!=mode30){vdeadline=v;vprevious30=mode30;vstarted=true;}
   vdeadline+=mode30?2:1;
   {unsigned m=native_measuring_visual;if(fine_draw_work>fine_work_max[m])fine_work_max[m]=fine_draw_work;fine_draw_work=0;
@@ -205,6 +220,7 @@ static void platform_exit(){
  }
  if(native_irq_failed)report_puts("ROAD INTERRUPT TIMEOUT - report the counters below.");
  report_printf("R028 IDLE stop_waits=%lu\n",(unsigned long)native_idle_waits);
+ report_printf("SKIP %s skipped_draws=%lu\n",native_skip_mode>0?"on":"off",(unsigned long)native_skipped_draws);
  report_printf("R029 PACE %s screen=%s\n",native_vsync_pace?"VSYNC (2 refreshes a picture)":"CLOCK (30 a second)",native_hz60?"60 Hz":"55.46 Hz");
  report_printf("R029 HANDOFF calls=%lu stop_waits=%lu us/draw=%lu\n",(unsigned long)native_handoff_calls,(unsigned long)native_handoff_waits,(unsigned long)(native_handoff_calls?native_handoff_fine*50UL/native_handoff_calls:0));
  report_printf("ROAD BRIDGE r030 320x224 BG/raster\nframes=%lu shown=%lu cs=%lu fps_x1000=%lu\n",(unsigned long)native_frames,(unsigned long)road_shown,(unsigned long)t,t?native_frames*100000UL/t:0);

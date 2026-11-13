@@ -51,7 +51,12 @@ int main(int argc,char**argv) {
     for(int a=2;a<argc;a++){char w[8]={0};for(int k=0;k<7&&argv[a][k];k++)w[k]=char(argv[a][k]|32);
      if(!strcmp(w,"vsync"))native_vsync_pace=true;
      if(!strcmp(w,"clock"))native_vsync_pace=false;
-     if(!strcmp(w,"hz60")){native_hz60=true;native_vsync_pace=true;}}
+     if(!strcmp(w,"hz60")){native_hz60=true;native_vsync_pace=true;}
+     // SKIP / NOSKIP: leave pictures out when the machine cannot draw one every 2 refreshes, so the
+     // game keeps its speed (default: on in a normal game, off in a measured run with a frame count)
+     if(!strcmp(w,"skip"))native_skip_mode=1;
+     if(!strcmp(w,"noskip"))native_skip_mode=0;}
+    if(native_skip_mode<0)native_skip_mode=max_frames==0?1:0;
 #endif
     cbx68_test=argc>1&&(argv[1][0]|32)=='t'&&(argv[1][1]|32)=='e'&&(argv[1][2]|32)=='s'&&(argv[1][3]|32)=='t'&&!argv[1][4];
     if(cbx68_test){
@@ -66,7 +71,10 @@ int main(int argc,char**argv) {
     bool road_demo=argc>3&&strcmp(argv[3],"manual");bool road_right=road_demo&&!strcmp(argv[3],"right");
     bool visual_cycle=argc>4&&!strcmp(argv[4],"cycle");
     // Cannonball for x68: 5th argument = ROM folder (default ROMS\, as Cannonball's roms/ folder)
-    {extern const char* cbx68_rom_path;if(argc>5)cbx68_rom_path=argv[5];}
+    {extern const char* cbx68_rom_path;
+     auto option_word=[](const char*a){char w[8]={0};for(int k=0;k<7&&a[k];k++)w[k]=char(a[k]|32);
+      return !strcmp(w,"vsync")||!strcmp(w,"clock")||!strcmp(w,"hz60")||!strcmp(w,"skip")||!strcmp(w,"noskip");};
+     if(argc>5&&!option_word(argv[5]))cbx68_rom_path=argv[5];}
     if(argc>4){if(!strcmp(argv[4],"road")||visual_cycle)visual_mode=0;else if(!strcmp(argv[4],"bg"))visual_mode=1;else if(!strcmp(argv[4],"car"))visual_mode=2;else if(!strcmp(argv[4],"both"))visual_mode=3;}
     memset(&config.engine,0,sizeof config.engine);
     config.data.asset_path="assets/"; config.data.res_path="./";config.data.save_path="./";config.data.crc32=0;
@@ -282,6 +290,9 @@ int main(int argc,char**argv) {
         timeline_step(frame,logic);
 #endif
         bool draw=render_schedule.should_draw(frame);
+#ifdef OR_X68K
+        if(draw&&native_skip_mode>0&&!cbx68_test)draw=platform_draw_due(frame);
+#endif
         if(draw){
 #ifdef OR_X68K
             RoadFrame& road_frame=platform_road_back();

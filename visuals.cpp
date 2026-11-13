@@ -835,13 +835,15 @@ uint32_t scenery_fine_total=0,scenery_fine_capture=0,scenery_fine_max=0,scenery_
 // with the sprite display on costs about 1.1 us on XEiJ (IOSPEED line of the report): with 96 a
 // quarter of the job lists finished after their tile row had begun (16 MHz, start scene), with
 // 64 none did. On the X68000 the start-up code measures the write time and sets the budget
-// (visuals_set_line_budget); -DCBX68_BUDGET=N fixes it.
+// (visuals_set_line_budget, 38 to 67); -DCBX68_BUDGET=N fixes it.
 #ifdef CBX68_BUDGET
 static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;
 void visuals_set_line_budget(unsigned){}
 #else
 static unsigned SCENERY_LINE_BUDGET=64;
-void visuals_set_line_budget(unsigned longs){SCENERY_LINE_BUDGET=longs<38?38:longs>96?96:longs;}   // 38: one pattern and one sprite
+// 38: one pattern and one sprite. 67: never two whole patterns (68 longs) in one line: that alone is
+// more than a line period at the 0.93 us a long the sprite controller takes on XEiJ whatever the CPU.
+void visuals_set_line_budget(unsigned longs){SCENERY_LINE_BUDGET=longs<38?38:longs>67?67:longs;}
 #endif
 unsigned visuals_line_budget(){return SCENERY_LINE_BUDGET;}
 #ifndef CBX68_REWRITTEN_FIRST
