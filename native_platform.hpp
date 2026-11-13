@@ -20,13 +20,14 @@ extern "C"{uint16_t* volatile road_mask_scan=0;uint32_t road_mask_offset=uint32_
 volatile uint32_t road_vblanks=0,road_shown=0,road_irq_count=0;
 extern "C"{volatile uint8_t road_vblank_busy=0;volatile uint32_t road_vblank_overruns=0;}
 static uint32_t io_probe_ns[5],io_probe_n[5],pcg_long_ns=0;
+static int native_light_mode=-1;   // -1 by the measured bus, 0 FULL, 1 LIGHT
 extern "C"{extern volatile uint8_t audio_hold;extern volatile uint32_t audio_ticks_done,audio_fm_writes,audio_fm_timeouts,audio_pcm_bytes,audio_pcm_resyncs;extern uint8_t audio_pcm_enabled,audio_fm_enabled;extern uint8_t audio_enabled;extern uint16_t audio_ticks_per_blank;void audio_silence();void audio_start(int with_game);}
 #ifdef CBX68_AUDIO_LOG
 extern "C"{extern uint32_t audio_log[];extern volatile uint32_t audio_log_n;}
 #endif
 // MPU caches (main.cpp calls native_cache_on at the start, platform_exit puts the state back).
-// Asked through IOCS _SYS_STAT (d1=3 reads the state: bit 0 instruction, bit 1 data; d1=4 sets it
-// from d2), which the X68030 ROM and the 68060 accelerator's driver provide. Without them the call
+// Asked through IOCS _SYS_STAT (d1=1 reads the state: bit 0 instruction, bit 1 data; d1=4 sets it
+// from d2; d1=3 is not the state but "push and invalidate"), which the X68030 ROM and the 68060 accelerator's driver provide. Without them the call
 // fails and nothing is touched: turning the caches on in the CACR by hand would also cache the I/O
 // area when nobody has set the MMU or the transparent translation registers up for it.
 static int native_cache_before=-1;static bool native_cache_set=false,native_cache_was_set=false;
@@ -36,7 +37,7 @@ static long native_sys_stat(long mode,long value){
  return d0;
 }
 static void native_cache_on(){
- native_cache_before=int(native_sys_stat(3,0));
+ native_cache_before=int(native_sys_stat(1,0));
  if(native_cache_before>=0&&(native_cache_before&3)!=3){native_sys_stat(4,3);native_cache_set=native_cache_was_set=true;}
 }
 static void native_cache_restore(){
@@ -153,7 +154,10 @@ static void platform_init(){
   uint32_t n=0;unsigned steps=0;
   while(steps<40&&n<400000UL){for(unsigned j=0;j<32;j++)q[j]=0;n+=32;t=HW8(0xe88023);steps=(t0+200-t)%200;}
   pcg_long_ns=steps?steps*50000UL/n:0;
-  if(pcg_long_ns)visuals_set_line_budget(unsigned(60000UL/pcg_long_ns));}
+  if(pcg_long_ns)visuals_set_line_budget(unsigned(60000UL/pcg_long_ns));
+  // r031l: light mode on a slow bus (XEiJ 060turbo: 1.0 us a long without wait cycles, 1.9 us with
+  // them, as on the real board). Arguments LIGHT / FULL choose it by hand.
+  visuals_set_light(native_light_mode<0?pcg_long_ns>=1400:native_light_mode>0);}
  restore_irqs(sr);
  native_started=native_clock();native_frames=0;
  fine_start=fine_phase_start=platform_fine_clock();
@@ -262,7 +266,7 @@ static void platform_exit(){
  report_printf("shown_x1000=%lu\n",t?road_shown*100000UL/t:0);
  report_printf("MPU cache at start=%d%s (-1: no cache control in this system, 3: both on)\n",native_cache_before,native_cache_was_set?", turned on by this program":"");
  report_printf("IOSPEED ns/long ram=%lu pcg=%lu bg=%lu pal=%lu crtc=%lu\n",(unsigned long)io_probe_ns[0],(unsigned long)io_probe_ns[1],(unsigned long)io_probe_ns[2],(unsigned long)io_probe_ns[3],(unsigned long)io_probe_ns[4]);
- report_printf("LINE BUDGET longs=%u (pcg ns/long at start=%lu)\n",visuals_line_budget(),(unsigned long)pcg_long_ns);
+ report_printf("LINE BUDGET longs=%u (pcg ns/long at start=%lu) scenery=%s\n",visuals_line_budget(),(unsigned long)pcg_long_ns,visuals_light()?"LIGHT":"FULL");
  report_printf("vblanks=%lu raster_irqs=%lu vblank_overruns=%lu\n",(unsigned long)road_vblanks,(unsigned long)road_irq_count,(unsigned long)road_vblank_overruns);
  {
   uint32_t fine_total=fine_last-fine_start;

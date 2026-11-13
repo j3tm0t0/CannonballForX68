@@ -864,6 +864,20 @@ static unsigned SCENERY_LINE_BUDGET=64;
 void visuals_set_line_budget(unsigned longs){SCENERY_LINE_BUDGET=longs<16?16:longs>67?67:longs;}
 #endif
 unsigned visuals_line_budget(){return SCENERY_LINE_BUDGET;}
+// r031l "light" mode, for a slow bus. Sprite numbers and patterns used twice down the screen are
+// rewritten in the raster interrupts, and the start state put back, in every screen refresh a
+// picture is shown; on the real bus (1.9 us a long to the PCG) that took about a fifth of all
+// the time. In light mode a frame keeps only as many roadside tiles as there are patterns (after
+// the road's and the car's) plus SCENERY_LIGHT_REWRITES, the ones with the most pixels; the
+// others are left out before the numbers are given out.
+#ifndef CBX68_LIGHT_REWRITES
+#define CBX68_LIGHT_REWRITES 32
+#endif
+static unsigned SCENERY_LIGHT_REWRITES=CBX68_LIGHT_REWRITES;
+void visuals_set_light_rewrites(unsigned n){SCENERY_LIGHT_REWRITES=n;}
+static bool scenery_light=false;
+void visuals_set_light(bool on){scenery_light=on;}
+bool visuals_light(){return scenery_light;}
 #ifndef CBX68_REWRITTEN_FIRST
 #define CBX68_REWRITTEN_FIRST 1
 #endif
@@ -1339,14 +1353,25 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // users: car tiles (index SCENERY_MAX+i) and roadside sprites, row by row, car first
  static uint16_t users[SCENERY_MAX+128];unsigned nu=0;
  // one counting pass instead of one pass per row (same order: car tiles, then the rest)
+ static uint8_t left_out[SCENERY_MAX];
+ if(scenery_light){   // keep the tiles with the most pixels (see SCENERY_LIGHT_REWRITES)
+  static uint8_t weight[SCENERY_MAX];unsigned count[34]={0};
+  for(unsigned i=0;i<S.count;i++){const uint32_t*p=S.pcg[i];unsigned w=0;for(unsigned q=0;q<32;q++)w+=p[q]!=0;weight[i]=uint8_t(w);++count[w];}
+  const unsigned room=(nP>car_sprites?nP-car_sprites:0)+SCENERY_LIGHT_REWRITES;
+  unsigned kept=0;int cut=33;   // tiles of weight >= cut are kept; of weight cut-1 as many as still fit
+  while(cut>0&&kept+count[cut-1]<=room){--cut;kept+=count[cut];}
+  unsigned more=cut>0?room-kept:0;
+  for(unsigned i=0;i<S.count;i++){const unsigned w=weight[i];
+   if(int(w)>=cut)left_out[i]=0;else if(int(w)==cut-1&&more){left_out[i]=0;--more;}else{left_out[i]=1;++S.dropped;}}
+ }else memset(left_out,0,S.count);
  {unsigned start[15]={0};uint8_t car_row[128];
   for(unsigned i=0;i<car_sprites;i++){const unsigned r=unsigned(car.registers[i][1]-16)/16;car_row[i]=uint8_t(r<14?r:14);if(r<14)++start[r+1];}
-  for(unsigned i=0;i<S.count;i++)if(S.sprite[i].row<14)++start[S.sprite[i].row+1];
+  for(unsigned i=0;i<S.count;i++)if(S.sprite[i].row<14&&!left_out[i])++start[S.sprite[i].row+1];
   for(unsigned r=1;r<15;r++)start[r]+=start[r-1];
   nu=start[14];
   unsigned car_end[14];for(unsigned r=0;r<14;r++)car_end[r]=start[r];
   for(unsigned i=0;i<car_sprites;i++)if(car_row[i]<14)users[car_end[car_row[i]]++]=uint16_t(SCENERY_MAX+i);
-  for(unsigned i=0;i<S.count;i++){const unsigned r=S.sprite[i].row;if(r<14)users[car_end[r]++]=uint16_t(i);}
+  for(unsigned i=0;i<S.count;i++){const unsigned r=S.sprite[i].row;if(r<14&&!left_out[i])users[car_end[r]++]=uint16_t(i);}
   // r031e: within a tile row the fullest tiles come first, so what does not fit any more (the
   // row's line budget for pattern loads) are the tiles with the fewest pixels. Only rows that
   // can run short are sorted (more tiles than the 10 lines after the row before can load).
@@ -1377,7 +1402,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  static uint16_t o_car2[128],o_car3[128];static uint32_t o_longs[3];
  uint32_t sig=2166136261UL;
  {auto mix=[&](uint32_t x){sig^=x;sig*=16777619UL;};
-  mix(packet_gen);mix(car_sprites);mix(SCENERY_LINE_BUDGET);
+  mix(packet_gen);mix(car_sprites);mix(SCENERY_LINE_BUDGET);mix(scenery_light?1+SCENERY_LIGHT_REWRITES:0);
   for(unsigned i=0;i<car_sprites;i++){mix(car.registers[i][0]);mix(car.registers[i][1]);mix(car.registers[i][2]&0xff00u);mix(car.registers[i][3]);
    for(unsigned q=0;q<32;q++)mix(car_pcg32[i][q]);}
   mix(hud.active);mix(hud.bands);for(unsigned b=0;b<hud.bands;b++){mix(hud.band_first[b]);for(unsigned q=0;q<16;q++)mix(hud.band_pal[b][q]);}}
