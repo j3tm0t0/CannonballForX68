@@ -207,11 +207,18 @@ void road_build(const HWRoad&r,const uint16_t*pal,RoadFrame&f){
 }
 // After everything that changes the rows (road_build, visuals_build): see RoadFrame::row_changed.
 // CBX68_PROF: every row keeps its interrupt (the profiler takes one sample a line).
+// (the colour groups compared as longs: libc memcmp on the 68k is a byte loop behind a call)
+typedef uint32_t row_u32 __attribute__((__may_alias__));
+static inline bool row_ne(const uint16_t*a,const uint16_t*b,unsigned words){
+ const row_u32*x=(const row_u32*)a,*y=(const row_u32*)b;uint32_t d=0;
+ for(unsigned k=0;k<words/2;k++)d|=x[k]^y[k];
+ if(words&1)d|=uint32_t(a[words-1]^b[words-1]);
+ return d!=0;}
 void road_rows_changed(RoadFrame&f){
  f.row_changed[0]=0x3ff;
  for(unsigned y=1;y<224;y++){const RoadRow&a=f.rows[y-1],&b=f.rows[y];unsigned m=0;
   if(a.bg0!=b.bg0)m|=1;if(a.bg1!=b.bg1)m|=2;if(a.gpage!=b.gpage)m|=4;
-  if(memcmp(a.front,b.front,sizeof a.front))m|=8;if(memcmp(a.back,b.back,sizeof a.back))m|=16;if(memcmp(a.ground,b.ground,sizeof a.ground))m|=32;
+  if(row_ne(a.front,b.front,4))m|=8;if(row_ne(a.back,b.back,4))m|=16;if(row_ne(a.ground,b.ground,5))m|=32;
   if(a.bg_y!=b.bg_y)m|=64;if(a.bg_far_y!=b.bg_far_y)m|=128;if(a.control!=b.control)m|=256;if(a.road_enable!=b.road_enable)m|=512;
   f.row_changed[y]=uint16_t(m);}
  // Rows that need no raster interrupt: no register to write and no job list of the scenery.

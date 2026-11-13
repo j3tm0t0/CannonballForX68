@@ -1727,9 +1727,13 @@ static void build_hud_body(HudPacket&H,const uint16_t*pal,bool car_on_text){
  const unsigned bank=video.tile_layer->text_bank();
  static uint8_t changed[28][40];uint32_t rows=0;
  // a text row whose 40 codes are the bytes they were last frame is not looked at cell by cell
- static uint8_t row_bytes[28][80];const bool rows_known=hud_valid&&bank==hud_bank;
+ alignas(4) static uint8_t row_bytes[28][80];const bool rows_known=hud_valid&&bank==hud_bank;
+ // 80 bytes as 20 longs when the text RAM row is long-aligned (libc memcmp is a byte loop)
+ auto hud_row_same=[](const uint8_t*a,const uint8_t*b)->bool{
+  if(uintptr_t(a)&3)return !memcmp(a,b,80);
+  const alias_u32*x=(const alias_u32*)a,*y=(const alias_u32*)b;uint32_t d=0;for(unsigned k=0;k<20;k++)d|=x[k]^y[k];return !d;};
  for(unsigned my=0;my<28;my++){const uint8_t*const rb=tr+my*128+48;
-  if(rows_known&&!memcmp(rb,row_bytes[my],80)){memset(changed[my],0,40);rows|=hud_rows_mask&(1u<<my);continue;}
+  if(rows_known&&hud_row_same(rb,row_bytes[my])){memset(changed[my],0,40);rows|=hud_rows_mask&(1u<<my);continue;}
   memcpy(row_bytes[my],rb,80);
   for(unsigned cx=0;cx<40;cx++){uint16_t code=uint16_t((rb[cx*2]<<8)|rb[cx*2+1]);
    changed[my][cx]=!hud_valid||code!=hud_code[my][cx];hud_code[my][cx]=code;
