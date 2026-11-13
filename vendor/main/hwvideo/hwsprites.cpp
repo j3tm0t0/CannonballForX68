@@ -201,5 +201,6 @@ void hwsprites::capture_entry_table(const uint16_t* r,uint16_t* dst,const uint16
  bool positive=(flags&0x2000)!=0;p.x=r[6];if(p.x<128&&!positive)p.x+=512;p.x-=190;
  p.color=COLOR_BASE+((r[5]&127)<<4);p.custom=table;p.xbounds=xbounds;
  unsigned bank=((r[0]>>9)&7)%(SPRITES_LENGTH/65536);
- sprite_fast_dispatch(sprites+bank*65536,dst,p,(flags&0x4000)==0,positive,(r[3]&0x4000)!=0);
+  // the caller's table has no shadow entry (0x8000), so the kernels without the shadow test draw the same pixels
+ sprite_fast_dispatch(sprites+bank*65536,dst,p,(flags&0x4000)==0,positive,false);
 }

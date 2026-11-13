@@ -16,6 +16,10 @@ RoadRow* volatile road_active=0;
 RoadRow* volatile road_pending=0;
 RoadRow* volatile road_scan=0;
 volatile uint32_t road_vblanks=0,road_shown=0,road_irq_count=0;
+#ifdef CBX68_PROF
+// sampling profiler (road_irq.S): hits per 16 bytes of text, last bucket = outside the program
+extern "C"{extern char _start[],_etext[];uint32_t prof_text_size=0;uint32_t prof_hist[(0x140000>>4)+1];}
+#endif
 }
 static RoadFrame road_frames[3];   // r029: one shown, one waiting for the next vertical blank, one being built
 // r029: frame pacing (Masa compared the three on XM6 and chose VSYNC, 2026-11-08):
@@ -102,6 +106,10 @@ static void platform_init(){
  unsigned short sr=mask_irqs();
  saved_vblank=*(volatile uint32_t*)0x134;saved_raster=*(volatile uint32_t*)0x138;
  saved_iera=HW8(0xe88007);saved_imra=HW8(0xe88013);saved_aer=HW8(0xe88003);saved_tacr=HW8(0xe88019);saved_tadr=HW8(0xe8801f);
+
+#ifdef CBX68_PROF
+ prof_text_size=uint32_t(_etext-_start);if(prof_text_size>0x140000)prof_text_size=0x140000;
+#endif
  *(volatile uint32_t*)0x134=(uint32_t)road_vblank_irq;*(volatile uint32_t*)0x138=(uint32_t)road_raster_irq;
  HW8(0xe88003)=saved_aer&0xef;HW8(0xe88007)=saved_iera|0x60;HW8(0xe88013)=saved_imra|0x60;
  HW8(0xe8800b)&=0x9f;HW8(0xe8800f)&=0x9f;
@@ -194,5 +202,8 @@ static void platform_exit(){
     (unsigned long)(fine_phase_max[m][1]*50UL),(unsigned long)(fine_work_max[m]*50UL),(unsigned long)fine_overruns[m],(unsigned long)(fine_late[m]/60));
   }
  }
+#ifdef CBX68_PROF
+ {FILE*pf=fopen("PROF.BIN","wb");if(pf){fwrite(&prof_text_size,4,1,pf);fwrite(prof_hist,4,(prof_text_size>>4)+1,pf);fclose(pf);}}
+#endif
  FILE*f=fopen("ROADPERF.TXT","w");if(f){fprintf(f,"visual_mode=%u\nbackground_columns=%lu\ncar_frames=%lu\ncar_text_frames=%lu\nmax_sprites=%u\nmax_patterns=%u\nmax_line=%u\noverflow=%lu\n",visual_mode,(unsigned long)background_columns,(unsigned long)car_frames,(unsigned long)car_text_frames,car_peak_tiles,car_peak_patterns,car_peak_line,(unsigned long)car_overflows);fprintf(f,"submitted=%lu shown=%lu cs=%lu\nlogic_cs=%lu table_cs=%lu publish_cs=%lu wait_cs=%lu\nvblanks=%lu raster_irqs=%lu\n",(unsigned long)native_frames,(unsigned long)road_shown,(unsigned long)t,(unsigned long)native_phase_cs[0],(unsigned long)native_phase_cs[1],(unsigned long)native_phase_cs[2],(unsigned long)native_phase_cs[3],(unsigned long)road_vblanks,(unsigned long)road_irq_count);fclose(f);}
 }
