@@ -825,12 +825,19 @@ static uint32_t scenery_car_dropped=0,scenery_shared_total=0,scenery_frames=0,sc
 static unsigned scenery_peak=0,scenery_line_peak=0,scenery_block_peak=0;
 static uint32_t scenery_reuse_frames=0;   // r030
 uint32_t scenery_fine_total=0,scenery_fine_capture=0,scenery_fine_max=0,scenery_fine_colour=0,scenery_fine_tiles=0;
-// 64: what one line period (63.5 us) takes. A long written to the PCG with the sprite display on
-// costs about 1.1 us (XEiJ, IOSPEED line of the report), and with 96 a quarter of the job lists
-// finished after their tile row had begun (16 MHz, start scene); with 64 none did.
-#ifndef CBX68_BUDGET
-#define CBX68_BUDGET 64
+// Longs a raster interrupt may write. One line period is 63.5 us and a long written to the PCG
+// with the sprite display on costs about 1.1 us on XEiJ (IOSPEED line of the report): with 96 a
+// quarter of the job lists finished after their tile row had begun (16 MHz, start scene), with
+// 64 none did. On the X68000 the start-up code measures the write time and sets the budget
+// (visuals_set_line_budget); -DCBX68_BUDGET=N fixes it.
+#ifdef CBX68_BUDGET
+static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;
+void visuals_set_line_budget(unsigned){}
+#else
+static unsigned SCENERY_LINE_BUDGET=64;
+void visuals_set_line_budget(unsigned longs){SCENERY_LINE_BUDGET=longs<38?38:longs>96?96:longs;}   // 38: one pattern and one sprite
 #endif
+unsigned visuals_line_budget(){return SCENERY_LINE_BUDGET;}
 #ifndef CBX68_REWRITTEN_FIRST
 #define CBX68_REWRITTEN_FIRST 1
 #endif
@@ -840,7 +847,6 @@ static const bool SCENERY_REWRITTEN_FIRST=CBX68_REWRITTEN_FIRST;
 #endif
 static const bool SCENERY_DIFF=CBX68_DIFF;   // a pattern rewritten by a line job: only the longs that differ from what it held
 static uint32_t scenery_start_longs=0,scenery_restart_longs=0,scenery_line_longs=0;   // job list sizes, summed over the frames
-static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;   // longs per raster interrupt
 #ifndef OR_X68K
 static unsigned scenery_entry_list[256],scenery_entry_count=0;
 static uint64_t scenery_dropped_pixels=0,scenery_pixels_total=0,scenery_shadow_pixels=0;
@@ -1199,8 +1205,13 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  auto content_id=[&](unsigned u)->int{return u>=SCENERY_MAX?int(SCENERY_MAX+car.pattern_index[u-SCENERY_MAX]):int(u);};
  // the longs that differ between two patterns, and what writing them costs (2 a run + the data)
  // A mask in many short runs can cost more than the whole pattern (34): then the whole pattern.
- auto mask_cost=[](uint32_t m)->unsigned{return unsigned(__builtin_popcount(m))+2u*unsigned(__builtin_popcount(m&~(m<<1)));};
- auto diff_mask=[&](const uint32_t*a,const uint32_t*b)->uint32_t{uint32_t m=0;for(int q=31;q>=0;q--)m=(m<<1)|uint32_t(a[q]!=b[q]);return mask_cost(m)>34?0xffffffffu:m;};
+ // (longs and runs are counted while the mask is made: no population count call on the 68k)
+ unsigned diff_cost=34;
+ auto diff_mask=[&](const uint32_t*a,const uint32_t*b)->uint32_t{
+  uint32_t m=0;unsigned longs=0,runs=0,prev=0;
+  for(int q=31;q>=0;q--){const unsigned ne=a[q]!=b[q];m=(m<<1)|ne;longs+=ne;runs+=ne&~prev;prev=ne;}
+  diff_cost=longs+2*runs;if(diff_cost>34){diff_cost=34;return 0xffffffffu;}
+  return m;};
  S.car_dropped=0;
  for(unsigned q=0;q<nu;q++){const unsigned u=users[q];const bool is_car=u>=SCENERY_MAX;
   const int r=is_car?int(car.registers[u-SCENERY_MAX][1]-16)/16:S.sprite[u].row;
@@ -1230,7 +1241,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   if(sre){ls=find_line(16*(s_last[sn]+1)+3,z,4,room4);if(ls<0){drop();continue;}line_load[ls]+=4;}
   if(pn<0){
    for(unsigned q=0;q<2&&pn<0;q++){if(cand[q]<0)continue;
-    const uint32_t m=SCENERY_DIFF?diff_mask(pcg_of(unsigned(p_content[cand[q]])),mine):0xffffffffu;const unsigned need=mask_cost(m);
+    diff_cost=34;const uint32_t m=SCENERY_DIFF?diff_mask(pcg_of(unsigned(p_content[cand[q]])),mine):0xffffffffu;const unsigned need=diff_cost;
     int no_ptr=0;lp=find_line(16*(p_last[cand[q]]+1)+3,z,need,need>=34?room34:no_ptr);
     if(lp>=0){pn=cand[q];pre=true;from_q=int(q);pmask=m;pneed=need;}}
    if(pn<0){if(sre)line_load[ls]-=4;drop();continue;}

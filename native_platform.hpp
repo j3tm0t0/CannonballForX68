@@ -17,7 +17,7 @@ RoadRow* volatile road_pending=0;
 RoadRow* volatile road_scan=0;
 volatile uint32_t road_vblanks=0,road_shown=0,road_irq_count=0;
 extern "C"{volatile uint8_t road_vblank_busy=0;volatile uint32_t road_vblank_overruns=0;}
-static uint32_t io_probe_ns[5],io_probe_n[5];
+static uint32_t io_probe_ns[5],io_probe_n[5],pcg_long_ns=0;
 #ifdef CBX68_PROF
 // sampling profiler (road_irq.S): hits per 16 bytes of text, last bucket = outside the program
 extern "C"{extern char _start[],_etext[];uint32_t prof_text_size=0;uint32_t prof_hist[(0x140000>>4)+1];}
@@ -116,7 +116,18 @@ static void platform_init(){
  HW8(0xe88003)=saved_aer&0xef;HW8(0xe88007)=saved_iera|0x60;HW8(0xe88013)=saved_imra|0x60;
  HW8(0xe8800b)&=0x9f;HW8(0xe8800f)&=0x9f;
  HW8(0xe88019)=0;HW8(0xe8801f)=1;HW8(0xe88019)=8;
- HW16(0xeb0808)=0x0219;restore_irqs(sr);
+ HW16(0xeb0808)=0x0219;
+ // Line budget of the scenery jobs from the time a long written to the PCG takes with the sprite
+ // display on (MFP timer C, 50 us a step; pattern 127 is in the scenery pool and is loaded
+ // before it is shown). 75.5 us of longs a line: 64 at the 1.18 us this loop takes on XEiJ at 16 MHz, where 64 was found
+ // to keep every job list in time and 72 was not.
+ {volatile uint32_t*q=(volatile uint32_t*)(0xeb8000UL+127*128);
+  unsigned t0=HW8(0xe88023),t=t0;uint32_t guard=0;while(t==t0&&++guard<200000UL)t=HW8(0xe88023);t0=t;
+  uint32_t n=0;unsigned steps=0;
+  while(steps<40&&n<400000UL){for(unsigned j=0;j<32;j++)q[j]=0;n+=32;t=HW8(0xe88023);steps=(t0+200-t)%200;}
+  pcg_long_ns=steps?steps*50000UL/n:0;
+  if(pcg_long_ns)visuals_set_line_budget(unsigned(75500UL/pcg_long_ns));}
+ restore_irqs(sr);
  native_started=native_clock();native_frames=0;
  fine_start=fine_phase_start=platform_fine_clock();
 }
@@ -203,6 +214,7 @@ static void platform_exit(){
  report_printf("car_text_frames=%lu\n",(unsigned long)car_text_frames);
  report_printf("shown_x1000=%lu\n",t?road_shown*100000UL/t:0);
  report_printf("IOSPEED ns/long ram=%lu pcg=%lu bg=%lu pal=%lu crtc=%lu\n",(unsigned long)io_probe_ns[0],(unsigned long)io_probe_ns[1],(unsigned long)io_probe_ns[2],(unsigned long)io_probe_ns[3],(unsigned long)io_probe_ns[4]);
+ report_printf("LINE BUDGET longs=%u (pcg ns/long at start=%lu)\n",visuals_line_budget(),(unsigned long)pcg_long_ns);
  report_printf("vblanks=%lu raster_irqs=%lu vblank_overruns=%lu\n",(unsigned long)road_vblanks,(unsigned long)road_irq_count,(unsigned long)road_vblank_overruns);
  {
   uint32_t fine_total=fine_last-fine_start;
