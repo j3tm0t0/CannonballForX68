@@ -14,6 +14,8 @@ void visuals_preview(const RoadFrame&,uint16_t*);
 void visuals_native_init();
 void visuals_set_line_budget(unsigned longs);   // longs a raster interrupt may write (scenery jobs)
 unsigned visuals_line_budget();
+void visuals_set_light(bool on);   // r031l: no reuse of sprite numbers and patterns down the screen (slow bus)
+bool visuals_light();
 void visuals_handoff(RoadFrame&f);   // r029
 void visuals_stream(const RoadFrame&);
 extern "C" void visuals_native_commit(const RoadFrame*);

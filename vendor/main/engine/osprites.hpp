@@ -174,6 +174,11 @@ public:
 
 	// Converted sprite entries in RAM for hardware.
 	uint8_t sprite_order[0x2000];
+	// Cannonball for x68: the number of entries of each of the 512 priority slots (16 bytes each in
+	// sprite_order) is kept here, not in the slot's first byte: sprite_copy() looks at every slot on
+	// every game step, and reading and clearing one byte in each 16-byte slot went through 8 KB of
+	// memory, the size of the 68060's data cache.
+	uint8_t sprite_order_count[0x200];
 	uint8_t sprite_order2[0x2000];
 
     void sprite_control();

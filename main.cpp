@@ -68,7 +68,9 @@ int main(int argc,char**argv) {
      if(!strcmp(w,"noskip"))native_skip_mode=0;
      if(!strcmp(w,"nosound"))audio_enabled=0;   // r031: sound off
      if(!strcmp(w,"nopcm"))audio_pcm_enabled=0;   // r031c: FM only
-     if(!strcmp(w,"nofm"))audio_fm_enabled=0;}    // PCM only
+     if(!strcmp(w,"nofm"))audio_fm_enabled=0;    // PCM only
+     if(!strcmp(w,"light"))native_light_mode=1;   // r031l: scenery without reuse down the screen
+     if(!strcmp(w,"full"))native_light_mode=0;}
     if(native_hz60)audio_ticks_per_blank=2083;   // 125 Hz / 60 Hz
     if(native_skip_mode<0)native_skip_mode=max_frames==0?1:0;
 #endif
@@ -87,7 +89,7 @@ int main(int argc,char**argv) {
     // Cannonball for x68: 5th argument = ROM folder (default ROMS\, as Cannonball's roms/ folder)
     {extern const char* cbx68_rom_path;
      auto option_word=[](const char*a){char w[8]={0};for(int k=0;k<7&&a[k];k++)w[k]=char(a[k]|32);
-      return !strcmp(w,"vsync")||!strcmp(w,"clock")||!strcmp(w,"hz60")||!strcmp(w,"skip")||!strcmp(w,"noskip")||!strcmp(w,"nosound")||!strcmp(w,"nopcm")||!strcmp(w,"nofm");};
+      return !strcmp(w,"vsync")||!strcmp(w,"clock")||!strcmp(w,"hz60")||!strcmp(w,"skip")||!strcmp(w,"noskip")||!strcmp(w,"nosound")||!strcmp(w,"nopcm")||!strcmp(w,"nofm")||!strcmp(w,"light")||!strcmp(w,"full");};
      if(argc>5&&!option_word(argv[5]))cbx68_rom_path=argv[5];}
     if(argc>4){if(!strcmp(argv[4],"road")||visual_cycle)visual_mode=0;else if(!strcmp(argv[4],"bg"))visual_mode=1;else if(!strcmp(argv[4],"car"))visual_mode=2;else if(!strcmp(argv[4],"both"))visual_mode=3;}
     memset(&config.engine,0,sizeof config.engine);
@@ -193,6 +195,7 @@ int main(int argc,char**argv) {
 #else
  visuals_native_init();
  if(getenv("STAGE1_CHECK_VISUALS"))visuals_selftest();
+ if(const char*lv=getenv("CBX68_LIGHT")){extern void visuals_set_light_rewrites(unsigned);visuals_set_light(true);visuals_set_light_rewrites(unsigned(atoi(lv)));}   // PC check of the light mode (r031l): CBX68_LIGHT=<rewrites>
 #endif
     for(int frame=0;(!max_frames||frame<max_frames);frame++) {
         if(visual_cycle)visual_mode=(frame/200)&3;
