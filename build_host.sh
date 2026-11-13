@@ -14,6 +14,9 @@ echo visuals.cpp >> build/sources.txt
 echo road_bridge.cpp >> build/sources.txt
 echo draw_profile.cpp >> build/sources.txt
 echo audio_silent.cpp >> build/sources.txt
+# r031: PC check of the X68000 sound (CBX68_AUDIO_REPLAY=AUDIO.BIN)
+echo vendor/main/engine/audio/osound.cpp >> build/sources.txt
+echo audio_replay_host.cpp >> build/sources.txt
 echo assetloader_local.cpp >> build/sources.txt
 cat build/sources.txt | xargs -P 4 -I{} sh -c 'f="$1"; o="build/host/$(echo "$f" | tr / _).o"; g++ -std=c++14 -O2 -w -Istub -Ivendor/main -c "$f" -o "$o"' sh {}
 g++ -std=c++14 -O2 -w -Istub -Ivendor/main main.cpp $(while IFS= read -r f; do printf "build/host/%s.o " "$(echo "$f" | tr / _)"; done < build/sources.txt) -o build/host/stage1

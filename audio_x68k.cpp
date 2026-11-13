@@ -23,6 +23,14 @@ extern "C" {
  void audio_vblank();
  void audio_silence();
 }
+#ifdef CBX68_AUDIO_LOG
+// Check aid: every run of the sound code (0x80000000 | command, then its 8 engine bytes in two
+// longs) and every register write it makes (register << 8 | value), written to AUDIO.BIN at the
+// end. The PC build replays the commands through the same sound code and compares the writes
+// (CBX68_AUDIO_REPLAY=AUDIO.BIN).
+extern "C"{uint32_t audio_log[300000];volatile uint32_t audio_log_n=0;}
+static inline void audio_log_put(uint32_t v){if(audio_log_n<300000)audio_log[audio_log_n++]=v;}
+#endif
 static inline volatile uint8_t* opm_reg(){return (volatile uint8_t*)0xe90001UL;}
 static inline volatile uint8_t* opm_data(){return (volatile uint8_t*)0xe90003UL;}   // read: status (bit 7 busy)
 static void opm_wait(){
@@ -58,6 +66,9 @@ int YM2151::read_status(){return 1;}     // timer A "has run out" (the caller is
 void YM2151::write_reg(int r,int v){
  if(!audio_enabled||!audio_super)return;
  r&=255;v&=255;
+#ifdef CBX68_AUDIO_LOG
+ if(!audio_hold)audio_log_put((uint32_t(r)<<8)|uint32_t(v));
+#endif
  // timers: the chip must not raise its interrupt on the X68000 (the sound code is paced by the
  // vertical blank), so the timer control register is left alone
  if(r==0x14)return;
@@ -102,6 +113,11 @@ void audio_vblank(){
  acc=uint16_t(acc+audio_ticks_per_blank);
  while(acc>=1000){acc=uint16_t(acc-1000);
   osoundint.play_queued_sound();
+#ifdef CBX68_AUDIO_LOG
+  audio_log_put(0x80000000u|osound.command_input);
+  audio_log_put((uint32_t(osound.engine_data[0])<<24)|(uint32_t(osound.engine_data[1])<<16)|(uint32_t(osound.engine_data[2])<<8)|osound.engine_data[3]);
+  audio_log_put((uint32_t(osound.engine_data[4])<<24)|(uint32_t(osound.engine_data[5])<<16)|(uint32_t(osound.engine_data[6])<<8)|osound.engine_data[7]);
+#endif
   osound.tick();
   ++audio_ticks_done;}
 }

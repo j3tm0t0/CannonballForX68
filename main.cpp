@@ -103,6 +103,10 @@ int main(int argc,char**argv) {
         printf("Place the OutRun (Revision B) ROM files in %s and start again.\n",cbx68_rom_path);
         printf("To check the display without ROMs, run: CBX68 TEST\n");
         return 1;}
+#ifndef OR_X68K
+    // r031: replay a sound log of the X68000 build through the PC's sound code and compare (audio_replay_host.cpp)
+    if(const char*al=getenv("CBX68_AUDIO_REPLAY")){extern int audio_replay(const char*);return audio_replay(al);}
+#endif
     if(!road_assets_load()){puts("ROAD DATA BUILD FAILED");return 3;}   // from the road ROM, before the video set-up frees it
     puts("Assets loaded. Initializing display...");fflush(stdout);
     omusic.load_widescreen_map("./");

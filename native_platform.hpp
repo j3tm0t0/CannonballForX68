@@ -19,6 +19,9 @@ volatile uint32_t road_vblanks=0,road_shown=0,road_irq_count=0;
 extern "C"{volatile uint8_t road_vblank_busy=0;volatile uint32_t road_vblank_overruns=0;}
 static uint32_t io_probe_ns[5],io_probe_n[5],pcg_long_ns=0;
 extern "C"{extern volatile uint8_t audio_hold;extern volatile uint32_t audio_ticks_done,audio_fm_writes,audio_fm_timeouts;extern uint8_t audio_enabled;extern uint16_t audio_ticks_per_blank;void audio_silence();void audio_start(int with_game);}
+#ifdef CBX68_AUDIO_LOG
+extern "C"{extern uint32_t audio_log[];extern volatile uint32_t audio_log_n;}
+#endif
 static int native_audio_game=1;   // main.cpp: 0 for the display test (no ROMs, no sound program)
 #ifdef CBX68_PROF
 // sampling profiler (road_irq.S): hits per 16 bytes of text, last bucket = outside the program
@@ -247,6 +250,9 @@ static void platform_exit(){
     (unsigned long)(fine_phase_max[m][1]*50UL),(unsigned long)(fine_work_max[m]*50UL),(unsigned long)fine_overruns[m],(unsigned long)(fine_late[m]/60));
   }
  }
+#ifdef CBX68_AUDIO_LOG
+ {FILE*af=fopen("AUDIO.BIN","wb");if(af){fwrite(audio_log,4,audio_log_n,af);fclose(af);}}
+#endif
 #ifdef CBX68_PROF
  {FILE*pf=fopen("PROF.BIN","wb");if(pf){fwrite(&prof_text_size,4,1,pf);fwrite(prof_hist,4,(prof_text_size>>4)+1,pf);fclose(pf);}}
 #endif
