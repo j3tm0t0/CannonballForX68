@@ -1338,7 +1338,7 @@ static uint32_t irq_hist[16],irq_hist_last=0;   // frames by raster interrupts t
 #endif
 #ifdef OR_X68K
 extern RoadRow* volatile road_scan;
-extern "C"{RoadRow* volatile road_scan_end=0;volatile uint8_t scenery_unfinished=0;}   // set by road_vblank_irq: where the last pass ended
+extern "C"{RoadRow* volatile road_scan_end=0;volatile uint8_t scenery_unfinished=0,scenery_dirty=0;}   // set by road_vblank_irq: where the last pass ended
 static const RoadRow*vblank_rows=0;static bool vblank_state_ok=false;static uint32_t scenery_restarts=0,scenery_skipped_blanks=0;
 #endif
 // Runs at interrupt mask 5 with the raster interrupts enabled (road_irq.S: from the vertical
@@ -1363,7 +1363,8 @@ extern "C" void scenery_vblank(const RoadRow*rows){
 #ifdef OR_X68K
  // The same frame again, and its last pass ran every line job on the state this function left:
  // the sprite numbers and patterns no line job touches still hold the start state.
- const bool again=rows==vblank_rows&&vblank_state_ok&&!scenery_unfinished&&road_scan_end==rows+224;
+ const bool dirty=scenery_dirty;scenery_dirty=0;   // a blank that came during the last blank's work cut that pass off
+ const bool again=rows==vblank_rows&&vblank_state_ok&&!dirty&&!scenery_unfinished&&road_scan_end==rows+224;
  vblank_rows=rows;vblank_state_ok=false;
  if(again){if(S.restart_job)scenery_run((const uint32_t*)S.restart_job);++scenery_restarts;}
  else if(S.start_job)scenery_run((const uint32_t*)S.start_job);

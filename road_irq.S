@@ -18,6 +18,7 @@ road_vblank_irq:
  beq 3f
  /* the previous blank's work is still running: only restart the raster lines */
  addq.l #1,road_vblank_overruns
+ st scenery_dirty                /* the pass that was running is cut off: full start state next time */
  clr.l scenery_scan
  clr.w scenery_owed
  addq.b #1,scenery_gen
