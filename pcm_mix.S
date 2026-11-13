@@ -7,7 +7,7 @@
      bank   the channel's 64 KB bank of the sample ROM
      addr   16.8 address within the bank (the low 24 bits of the channel's address)
      step   what a sample adds to the address (0..510)
-     vol    0..510
+     vol    0..1530 (the two volumes times PCM_GAIN)
      count  1..65536; the caller keeps addr+(count-1)*step below 0x1000000 (inside the bank)
    For k = 0..count-1: m[k] += bank[(addr+k*step)>>8] * vol, the byte taken as 0..255.
    (The chip's samples are the bytes less 0x80: the caller takes 0x80*vol off afterwards.) */
