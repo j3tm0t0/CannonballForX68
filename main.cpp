@@ -42,6 +42,11 @@ int main(int argc,char**argv) {
 #ifdef OR_X68K
  max_frames=argc>1?atoi(argv[1]):0;
 #endif
+#ifdef OR_X68K
+    // r031n: on a 060turbo, run again in local memory (native_platform.hpp) unless MAIN is given
+    {bool stay=false;for(int a=1;a<argc;a++){char w[8]={0};for(int k=0;k<7&&argv[a][k];k++)w[k]=char(argv[a][k]|32);if(!strcmp(w,"main"))stay=true;}
+     if(!stay)native_run_in_local_memory();}
+#endif
     puts("Cannonball for x68 v0.2 - unofficial X68000 port by Mattsuan-Z@ColtMaz");
     puts("Based on Cannonball (OutRun engine) by Chris White and the Cannonball team");
     puts("OutRun is a trademark of SEGA. Not affiliated with SEGA or the Cannonball team. ROMs not included.");fflush(stdout);
@@ -89,7 +94,7 @@ int main(int argc,char**argv) {
     // Cannonball for x68: 5th argument = ROM folder (default ROMS\, as Cannonball's roms/ folder)
     {extern const char* cbx68_rom_path;
      auto option_word=[](const char*a){char w[8]={0};for(int k=0;k<7&&a[k];k++)w[k]=char(a[k]|32);
-      return !strcmp(w,"vsync")||!strcmp(w,"clock")||!strcmp(w,"hz60")||!strcmp(w,"skip")||!strcmp(w,"noskip")||!strcmp(w,"nosound")||!strcmp(w,"nopcm")||!strcmp(w,"nofm")||!strcmp(w,"light")||!strcmp(w,"full");};
+      return !strcmp(w,"vsync")||!strcmp(w,"clock")||!strcmp(w,"hz60")||!strcmp(w,"skip")||!strcmp(w,"noskip")||!strcmp(w,"nosound")||!strcmp(w,"nopcm")||!strcmp(w,"nofm")||!strcmp(w,"light")||!strcmp(w,"full")||!strcmp(w,"main");};
      if(argc>5&&!option_word(argv[5]))cbx68_rom_path=argv[5];}
     if(argc>4){if(!strcmp(argv[4],"road")||visual_cycle)visual_mode=0;else if(!strcmp(argv[4],"bg"))visual_mode=1;else if(!strcmp(argv[4],"car"))visual_mode=2;else if(!strcmp(argv[4],"both"))visual_mode=3;}
     memset(&config.engine,0,sizeof config.engine);

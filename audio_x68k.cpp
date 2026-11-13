@@ -12,6 +12,8 @@
 #include "engine/audio/osoundint.hpp"
 #include <cstring>
 #include "assets.hpp"
+#include "x68k_sysstat.hpp"
+#include <x68k/dos.h>
 
 extern OSound osound;
 extern "C" {
@@ -101,7 +103,21 @@ void SegaPCM::init(int32_t,int32_t){}
 void SegaPCM::stream_update(){}
 enum {PCM_BLOCKS=4,PCM_BLOCK_BYTES=512,PCM_RING=PCM_BLOCKS*PCM_BLOCK_BYTES,PCM_LEAD=448,PCM_MAX_FILL=448};
 struct PcmLink {void*addr;uint16_t len;const PcmLink*next;} __attribute__((__packed__,__aligned__(2)));
-static uint8_t pcm_ring[PCM_RING];static PcmLink pcm_links[PCM_BLOCKS];
+static uint8_t pcm_ring_here[PCM_RING];static PcmLink pcm_links_here[PCM_BLOCKS];
+// r031n: the DMA controller reads the link array and the ring itself, and it cannot reach the
+// 060turbo's local memory. When the program runs there, both are taken from main memory.
+static uint8_t*pcm_ring=pcm_ring_here;static PcmLink*pcm_links=pcm_links_here;
+extern "C"{uint8_t audio_pcm_place=0;}   // 0 = in the program, 1 = taken from main memory, 2 = no reachable memory (PCM off)
+static bool pcm_place(){
+ if(x68k_dma_reachable(pcm_ring,PCM_RING)&&x68k_dma_reachable(pcm_links,sizeof pcm_links_here))return true;
+ const long before=x68k_sys_stat(0x5003,0);                // DOS _MALLOC from main memory only
+ void*const got=_dos_malloc(PCM_RING+sizeof pcm_links_here);
+ x68k_sys_stat(0x5003,before);
+ if(uint32_t(uintptr_t(got))>=0x81000000UL){audio_pcm_place=2;return false;}
+ if(!x68k_dma_reachable(got,PCM_RING+sizeof pcm_links_here)){_dos_mfree(got);audio_pcm_place=2;return false;}
+ pcm_ring=static_cast<uint8_t*>(got);pcm_links=reinterpret_cast<PcmLink*>(pcm_ring+PCM_RING);audio_pcm_place=1;
+ return true;
+}
 static unsigned pcm_write=0;static bool pcm_running=false;
 static int ad_value=0,ad_index=0;
 static const int16_t AD_STEP[49]={16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552};
@@ -146,6 +162,7 @@ static void pcm_mix_channels(uint8_t*ram,const uint8_t*rom,uint32_t rgnmask,uint
   regs[0x84]=uint8_t(addr>>8);regs[0x85]=uint8_t(addr>>16);low[ch]=(regs[0x86]&1)?0:uint8_t(addr);}
 }
 static void pcm_start(){
+ if(!pcm_place()){audio_pcm_enabled=0;return;}
  // silence, coded (the coder state runs on from here)
  ad_value=0;ad_index=0;
  for(unsigned k=0;k<PCM_RING;k++){unsigned lo=adpcm_encode(0),hi=adpcm_encode(0);pcm_ring[k]=uint8_t(lo|(hi<<4));}
