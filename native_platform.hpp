@@ -18,7 +18,7 @@ RoadRow* volatile road_scan=0;
 volatile uint32_t road_vblanks=0,road_shown=0,road_irq_count=0;
 extern "C"{volatile uint8_t road_vblank_busy=0;volatile uint32_t road_vblank_overruns=0;}
 static uint32_t io_probe_ns[5],io_probe_n[5],pcg_long_ns=0;
-extern "C"{extern volatile uint8_t audio_hold;extern volatile uint32_t audio_ticks_done,audio_fm_writes,audio_fm_timeouts;extern uint8_t audio_enabled;extern uint16_t audio_ticks_per_blank;void audio_silence();void audio_start(int with_game);}
+extern "C"{extern volatile uint8_t audio_hold;extern volatile uint32_t audio_ticks_done,audio_fm_writes,audio_fm_timeouts,audio_pcm_bytes,audio_pcm_resyncs;extern uint8_t audio_pcm_enabled;extern uint8_t audio_enabled;extern uint16_t audio_ticks_per_blank;void audio_silence();void audio_start(int with_game);}
 #ifdef CBX68_AUDIO_LOG
 extern "C"{extern uint32_t audio_log[];extern volatile uint32_t audio_log_n;}
 #endif
@@ -228,6 +228,7 @@ static void platform_exit(){
  if(native_irq_failed)report_puts("ROAD INTERRUPT TIMEOUT - report the counters below.");
  report_printf("R028 IDLE stop_waits=%lu\n",(unsigned long)native_idle_waits);
  report_printf("R031 SOUND %s ticks=%lu fm_writes=%lu fm_timeouts=%lu\n",audio_enabled?"FM":"off",(unsigned long)audio_ticks_done,(unsigned long)audio_fm_writes,(unsigned long)audio_fm_timeouts);
+ report_printf("R031 PCM %s adpcm_bytes=%lu resyncs=%lu\n",audio_enabled&&audio_pcm_enabled?"ADPCM":"off",(unsigned long)audio_pcm_bytes,(unsigned long)audio_pcm_resyncs);
  report_printf("SKIP %s skipped_draws=%lu\n",native_skip_mode>0?"on":"off",(unsigned long)native_skipped_draws);
  report_printf("R029 PACE %s screen=%s\n",native_vsync_pace?"VSYNC (2 refreshes a picture)":"CLOCK (30 a second)",native_hz60?"60 Hz":"55.46 Hz");
  report_printf("R029 HANDOFF calls=%lu stop_waits=%lu us/draw=%lu\n",(unsigned long)native_handoff_calls,(unsigned long)native_handoff_waits,(unsigned long)(native_handoff_calls?native_handoff_fine*50UL/native_handoff_calls:0));
