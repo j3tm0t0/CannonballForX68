@@ -1205,8 +1205,13 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  auto content_id=[&](unsigned u)->int{return u>=SCENERY_MAX?int(SCENERY_MAX+car.pattern_index[u-SCENERY_MAX]):int(u);};
  // the longs that differ between two patterns, and what writing them costs (2 a run + the data)
  // A mask in many short runs can cost more than the whole pattern (34): then the whole pattern.
- auto mask_cost=[](uint32_t m)->unsigned{return unsigned(__builtin_popcount(m))+2u*unsigned(__builtin_popcount(m&~(m<<1)));};
- auto diff_mask=[&](const uint32_t*a,const uint32_t*b)->uint32_t{uint32_t m=0;for(int q=31;q>=0;q--)m=(m<<1)|uint32_t(a[q]!=b[q]);return mask_cost(m)>34?0xffffffffu:m;};
+ // (longs and runs are counted while the mask is made: no population count call on the 68k)
+ unsigned diff_cost=34;
+ auto diff_mask=[&](const uint32_t*a,const uint32_t*b)->uint32_t{
+  uint32_t m=0;unsigned longs=0,runs=0,prev=0;
+  for(int q=31;q>=0;q--){const unsigned ne=a[q]!=b[q];m=(m<<1)|ne;longs+=ne;runs+=ne&~prev;prev=ne;}
+  diff_cost=longs+2*runs;if(diff_cost>34){diff_cost=34;return 0xffffffffu;}
+  return m;};
  S.car_dropped=0;
  for(unsigned q=0;q<nu;q++){const unsigned u=users[q];const bool is_car=u>=SCENERY_MAX;
   const int r=is_car?int(car.registers[u-SCENERY_MAX][1]-16)/16:S.sprite[u].row;
@@ -1236,7 +1241,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   if(sre){ls=find_line(16*(s_last[sn]+1)+3,z,4,room4);if(ls<0){drop();continue;}line_load[ls]+=4;}
   if(pn<0){
    for(unsigned q=0;q<2&&pn<0;q++){if(cand[q]<0)continue;
-    const uint32_t m=SCENERY_DIFF?diff_mask(pcg_of(unsigned(p_content[cand[q]])),mine):0xffffffffu;const unsigned need=mask_cost(m);
+    diff_cost=34;const uint32_t m=SCENERY_DIFF?diff_mask(pcg_of(unsigned(p_content[cand[q]])),mine):0xffffffffu;const unsigned need=diff_cost;
     int no_ptr=0;lp=find_line(16*(p_last[cand[q]]+1)+3,z,need,need>=34?room34:no_ptr);
     if(lp>=0){pn=cand[q];pre=true;from_q=int(q);pmask=m;pneed=need;}}
    if(pn<0){if(sre)line_load[ls]-=4;drop();continue;}
