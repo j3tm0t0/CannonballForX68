@@ -197,9 +197,22 @@ int main(int argc,char**argv) {
  if(getenv("STAGE1_CHECK_VISUALS"))visuals_selftest();
  if(const char*lv=getenv("CBX68_LIGHT")){extern void visuals_set_light_rewrites(unsigned);visuals_set_light(true);visuals_set_light_rewrites(unsigned(atoi(lv)));}   // PC check of the light mode (r031l): CBX68_LIGHT=<rewrites>
 #endif
+    bool draw_next=true;
     for(int frame=0;(!max_frames||frame<max_frames);frame++) {
         if(visual_cycle)visual_mode=(frame/200)&3;
         bool logic=(frame&1)==0;cannonball::tick_frame=logic;
+#ifdef OR_X68K
+        // r031m: whether the picture of this game step (drawn on the next loop pass) will be skipped
+        // is decided before the step, so the step can leave out what only the picture needs.
+        if(logic){draw_next=true;if(render_schedule.should_draw(frame+1)&&native_skip_mode>0&&!cbx68_test)draw_next=platform_draw_due(frame+1);
+         cannonball::skip_render=SKIP_RENDER_PREP&&!draw_next;}
+#else
+        // PC check of r031m: STAGE1_DRAW_EVERY=N draws only every Nth game step's picture, and
+        // STAGE1_SKIP_RENDER=1 tells the engine about the others (compare the state traces and the
+        // picture digests with and without it).
+        {static const int every=getenv("STAGE1_DRAW_EVERY")?atoi(getenv("STAGE1_DRAW_EVERY")):1;static const bool tell=getenv("STAGE1_SKIP_RENDER")!=0;
+         if(logic){draw_next=every<=1||((frame/2)%every)==0;cannonball::skip_render=tell&&!draw_next;}}
+#endif
 #ifndef OR_X68K
         if(automatic_switch&&frame>0&&frame%100==0)render_schedule.draw30=!render_schedule.draw30;
 #endif
@@ -312,9 +325,7 @@ int main(int argc,char**argv) {
         timeline_step(frame,logic);
 #endif
         bool draw=render_schedule.should_draw(frame);
-#ifdef OR_X68K
-        if(draw&&native_skip_mode>0&&!cbx68_test)draw=platform_draw_due(frame);
-#endif
+        if(draw&&!draw_next)draw=false;   // (decided before the game step, see above)
         if(draw){
 #ifdef OR_X68K
             RoadFrame& road_frame=platform_road_back();

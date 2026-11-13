@@ -165,6 +165,10 @@ static void platform_init(){
 // Picture skipping: the game does one step a screen refresh (VSYNC pace). When drawing has put
 // it 2 or more refreshes behind, the next picture is left out (the step itself still runs), at
 // most 27 in a row so the screen still changes once a second. Far behind (a long pause), the count starts again.
+#ifndef CBX68_SKIP_RENDER_PREP
+#define CBX68_SKIP_RENDER_PREP 1
+#endif
+static const bool SKIP_RENDER_PREP=CBX68_SKIP_RENDER_PREP;   // r031m: a step whose picture is skipped leaves out what only the picture needs
 static int native_skip_mode=-1,native_lag=0;static uint32_t native_skipped_draws=0;
 static bool platform_draw_due(int frame){
  static uint32_t v0=0;static int f0=0;static bool started=false;static unsigned row=0;
