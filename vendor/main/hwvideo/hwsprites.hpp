@@ -44,7 +44,9 @@ private:
     uint32_t sprites[SPRITES_LENGTH]; // Converted sprites
     
     // Two halves of RAM
-    uint16_t ram[SPRITE_RAM_SIZE];
-    uint16_t ramBuff[SPRITE_RAM_SIZE];
+    // Cannonball for x68: exchanged by their pointers (swap), not by copying
+    uint16_t ramStore[2][SPRITE_RAM_SIZE];
+    uint16_t* ram = ramStore[0];
+    uint16_t* ramBuff = ramStore[1];
 };
 

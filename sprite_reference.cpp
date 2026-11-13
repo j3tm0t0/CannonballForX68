@@ -194,10 +194,10 @@ void hwsprites::render_reference(const uint8_t priority)
     }
 }
 void hwsprites::save_render_state(uint16_t* out) const {
-    memcpy(out,ram,sizeof ram);memcpy(out+SPRITE_RAM_SIZE,ramBuff,sizeof ramBuff);
+    memcpy(out,ram,SPRITE_RAM_SIZE*sizeof(uint16_t));memcpy(out+SPRITE_RAM_SIZE,ramBuff,SPRITE_RAM_SIZE*sizeof(uint16_t));
 }
 void hwsprites::load_render_state(const uint16_t* in) {
-    memcpy(ram,in,sizeof ram);memcpy(ramBuff,in+SPRITE_RAM_SIZE,sizeof ramBuff);
+    memcpy(ram,in,SPRITE_RAM_SIZE*sizeof(uint16_t));memcpy(ramBuff,in+SPRITE_RAM_SIZE,SPRITE_RAM_SIZE*sizeof(uint16_t));
 }
 
 void hwsprites::verify_sprite_cases(){

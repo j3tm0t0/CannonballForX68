@@ -211,16 +211,10 @@ void HWRoad::write32(uint32_t* adr, const uint32_t data)
 
 uint16_t HWRoad::read_road_control()
 {
-    uint32_t *src = (uint32_t *)ram;
-    uint32_t *dst = (uint32_t *)ramBuff;
-
-    // swap the halves of the road RAM
-    for (uint16_t i = 0; i < ROAD_RAM_SIZE/4; i++)
-    {
-        uint32_t temp = *src;
-        *src++ = *dst;
-        *dst++ = temp;
-    }
+    // swap the halves of the road RAM (Cannonball for x68: by their pointers)
+    uint16_t* temp = ram;
+    ram = ramBuff;
+    ramBuff = temp;
 
     return 0xffff;
 }
