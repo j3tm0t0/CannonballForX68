@@ -122,18 +122,20 @@ static unsigned pcm_write=0;static bool pcm_running=false;
 static int ad_value=0,ad_index=0;
 static const int16_t AD_STEP[49]={16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552};
 static const int8_t AD_ADJ[8]={-1,-1,-1,-1,2,4,6,8};
-static inline unsigned adpcm_encode(int sample){
- int step=AD_STEP[ad_index],diff=sample-ad_value;unsigned nib=0;
+// (the coder's state is passed in: the loop that codes a whole block keeps it in registers)
+static inline unsigned adpcm_code(int sample,int&value,int&index){
+ int step=AD_STEP[index],diff=sample-value;unsigned nib=0;
  if(diff<0){nib=8;diff=-diff;}
  int delta=step>>3;
  if(diff>=step){nib|=4;diff-=step;delta+=step;}
  if(diff>=(step>>1)){nib|=2;diff-=step>>1;delta+=step>>1;}
  if(diff>=(step>>2)){nib|=1;delta+=step>>2;}
- ad_value+=(nib&8)?-delta:delta;
- if(ad_value>2047)ad_value=2047;else if(ad_value<-2048)ad_value=-2048;
- ad_index+=AD_ADJ[nib&7];if(ad_index<0)ad_index=0;else if(ad_index>48)ad_index=48;
+ value+=(nib&8)?-delta:delta;
+ if(value>2047)value=2047;else if(value<-2048)value=-2048;
+ index+=AD_ADJ[nib&7];if(index<0)index=0;else if(index>48)index=48;
  return nib;
 }
+static inline unsigned adpcm_encode(int sample){return adpcm_code(sample,ad_value,ad_index);}
 // what the chip's decoder does with one nibble (the coder above keeps the same state)
 static inline void adpcm_follow(unsigned nib){
  const int step=AD_STEP[ad_index];int delta=step>>3;
@@ -144,21 +146,55 @@ static inline void adpcm_follow(unsigned nib){
 }
 static uint32_t pcm_written=0,pcm_played=0;static unsigned pcm_last_at=0;   // bytes coded / bytes the DMA has read
 static int32_t pcm_mix[PCM_MAX_FILL*2];
+static int32_t pcm_bias=0;   // every sum in pcm_mix is this much too high (see pcm_mix_channels)
+// pcm_mix.S: m[k] += bank[(addr+k*step)>>8]*vol for k = 0..count-1 (the byte as 0..255)
+extern "C" void pcm_mix_run(int32_t*m,const uint8_t*bank,uint32_t addr,uint32_t step,uint32_t vol,uint32_t count);
+#ifdef CBX68_ASM_CHECK
+extern "C"{volatile uint32_t audio_mix_check[2]={0,0};}   // runs compared with the C loop, runs that differed
+#endif
 // n samples of the 16 channels into pcm_mix (the loop of SegaPCM::stream_update, two chip samples a step)
+// The test for the end address looks only at the top byte of the 24-bit address, and that byte
+// stays the same for at least 128 samples (a step is at most 510): the samples up to the next
+// change of it are mixed in one run without the test (pcm_mix_run). A run adds byte*volume with
+// the byte as 0..255; the chip's sample is the byte less 0x80, so 0x80*volume a sample is taken
+// off afterwards: for a channel that played all n samples it is added to pcm_bias (taken off
+// when the sums are read), else it is taken off the samples the channel played. A channel whose
+// two volumes are 0 adds nothing: its address is only moved on. The sums less pcm_bias, the
+// addresses and the flags are the same as with one sample at a time.
 static void pcm_mix_channels(uint8_t*ram,const uint8_t*rom,uint32_t rgnmask,uint8_t*low,unsigned n){
- memset(pcm_mix,0,n*sizeof pcm_mix[0]);
+ memset(pcm_mix,0,n*sizeof pcm_mix[0]);pcm_bias=0;
+ // (the index within a bank has 16 bits: a mask with its low 16 bits set changes none)
+ const bool plain=(rgnmask&0xffffu)==0xffffu;
  for(unsigned ch=0;ch<16;ch++){uint8_t*regs=ram+8*ch;
   if(regs[0x86]&1)continue;
   const uint8_t*bank=rom+(uint32_t(regs[0x86]&0x70)<<12);
   uint32_t addr=(uint32_t(regs[0x85])<<16)|(uint32_t(regs[0x84])<<8)|low[ch];
   const uint32_t loop=(uint32_t(regs[0x05])<<16)|(uint32_t(regs[0x04])<<8);
   const uint8_t end=uint8_t(regs[0x06]+1);
-  const int vol=int(regs[2])+int(regs[3]);const uint32_t step=uint32_t(regs[7])*2;
-  for(unsigned i=0;i<n;i++){
+  const uint32_t vol=uint32_t(regs[2])+uint32_t(regs[3]),step=uint32_t(regs[7])*2;
+  unsigned i=0;
+  while(i<n){
+   unsigned run=1;
    if(uint8_t(addr>>16)==end){
+    // (the sample after the jump back to the loop address is mixed without a test, as before)
     if(!(regs[0x86]&2))addr=loop;else{regs[0x86]|=1;break;}}
-   pcm_mix[i]+=(int(bank[(addr>>8)&rgnmask])-0x80)*vol;
-   addr=(addr+step)&0xffffff;}
+   else if(!step)run=n-i;
+   else{run=unsigned((0x10000u-(addr&0xffffu)+step-1)/step);if(run>n-i)run=n-i;}
+   if(vol){int32_t*m=pcm_mix+i;
+    if(plain){
+#ifdef CBX68_ASM_CHECK
+     static int32_t chk[PCM_MAX_FILL*2];uint32_t a=addr;
+     for(unsigned k=0;k<run;k++){chk[k]=m[k]+int32_t(uint32_t(bank[a>>8])*vol);a+=step;}
+#endif
+     pcm_mix_run(m,bank,addr,step,vol,run);
+#ifdef CBX68_ASM_CHECK
+     ++audio_mix_check[0];if(memcmp(chk,m,run*sizeof chk[0]))++audio_mix_check[1];
+#endif
+    }else{uint32_t a=addr;for(unsigned k=run;k;k--){*m++ +=int32_t(uint32_t(bank[(a>>8)&rgnmask])*vol);a+=step;}}}
+   addr=(addr+run*step)&0xffffff;i+=run;}
+  // the 0x80 of the i samples this channel played
+  if(vol){const int32_t off=int32_t(0x80u*vol);
+   if(i==n)pcm_bias+=off;else for(unsigned k=0;k<i;k++)pcm_mix[k]-=off;}
   regs[0x84]=uint8_t(addr>>8);regs[0x85]=uint8_t(addr>>16);low[ch]=(regs[0x86]&1)?0:uint8_t(addr);}
 }
 static void pcm_start(){
@@ -200,12 +236,14 @@ static void pcm_fill(){
  if(lead>=PCM_LEAD)return;
  unsigned bytes=unsigned(PCM_LEAD-lead);if(bytes>PCM_MAX_FILL)bytes=PCM_MAX_FILL;
  pcm_mix_channels(pcm_regs,pcm_rom,pcm_mask,pcm_low,bytes*2);
- const int32_t*m=pcm_mix;
+ const int32_t*m=pcm_mix;const int32_t bias=pcm_bias;
+ int value=ad_value,index=ad_index;unsigned at_w=pcm_write;uint8_t*const ring=pcm_ring;
  for(unsigned k=0;k<bytes;k++){
-  int a=int(m[0]>>PCM_SHIFT),b=int(m[1]>>PCM_SHIFT);m+=2;
+  int a=int((m[0]-bias)>>PCM_SHIFT),b=int((m[1]-bias)>>PCM_SHIFT);m+=2;
   if(a>2047)a=2047;else if(a<-2048)a=-2048;if(b>2047)b=2047;else if(b<-2048)b=-2048;
-  const unsigned lo=adpcm_encode(a),hi=adpcm_encode(b);
-  pcm_ring[pcm_write]=uint8_t(lo|(hi<<4));pcm_write=(pcm_write+1)%PCM_RING;}
+  const unsigned lo=adpcm_code(a,value,index),hi=adpcm_code(b,value,index);
+  ring[at_w]=uint8_t(lo|(hi<<4));at_w=(at_w+1)%PCM_RING;}
+ ad_value=value;ad_index=index;pcm_write=at_w;
  audio_pcm_bytes+=bytes;pcm_written+=bytes;
 }
 // ---- base class (no sample buffer on the X68000) ----
