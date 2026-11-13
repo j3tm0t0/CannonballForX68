@@ -44,47 +44,47 @@ SPRITE_INLINE uint16_t sprite_entry(const uint16_t* table,uint32_t t){
     return *(const uint16_t*)((const char*)table+(uint16_t(t)&0x1e));
 }
 // One source pixel.  acc enters in [0,hz); "acc-=0x200 first" lets the sign carry the test.
-template<int DX,bool Shadow,bool Minify,bool Clip>
-SPRITE_INLINE void sprite_pixel(uint16_t*& dst,short& acc,short hz,short unit,uint16_t value,const uint16_t* lo,unsigned span){
+template<typename P,int DX,bool Shadow,bool Minify,bool Clip>
+SPRITE_INLINE void sprite_pixel(P*& dst,short& acc,short hz,short unit,uint16_t value,const P* lo,unsigned span){
     acc-=unit;   // unit is 0x200, passed in so the word loop can hold it in a register
     if(Minify){
         if(acc>=0)return;
-        uint16_t* at=DX>0?dst:dst-1;
+        P* at=DX>0?dst:dst-1;
         if(value&&(!Clip||unsigned(at-lo)<span)){
-            if(Shadow&&short(value)<0)*at=(*at&0xfff)+S16_PALETTE_ENTRIES;
-            else *at=value;
+            if(Shadow&&short(value)<0)*at=P((*at&0xfff)+S16_PALETTE_ENTRIES);
+            else *at=P(value);
         }
         dst+=DX;acc+=hz;
     }else if(!value){
         do{dst+=DX;acc+=hz;}while(acc<0);
     }else if(Shadow&&short(value)<0){
-        do{uint16_t* at=DX>0?dst:dst-1;if(!Clip||unsigned(at-lo)<span)*at=(*at&0xfff)+S16_PALETTE_ENTRIES;dst+=DX;acc+=hz;}while(acc<0);
+        do{P* at=DX>0?dst:dst-1;if(!Clip||unsigned(at-lo)<span)*at=P((*at&0xfff)+S16_PALETTE_ENTRIES);dst+=DX;acc+=hz;}while(acc<0);
     }else if(Clip){
-        do{uint16_t* at=DX>0?dst:dst-1;if(unsigned(at-lo)<span)*at=value;dst+=DX;acc+=hz;}while(acc<0);
+        do{P* at=DX>0?dst:dst-1;if(unsigned(at-lo)<span)*at=P(value);dst+=DX;acc+=hz;}while(acc<0);
     }else if(DX>0){
-        do{*dst++=value;acc+=hz;}while(acc<0);
+        do{*dst++=P(value);acc+=hz;}while(acc<0);
     }else{
-        do{*--dst=value;acc+=hz;}while(acc<0);
+        do{*--dst=P(value);acc+=hz;}while(acc<0);
     }
 }
 // Eight pixels of one word.  Non-flipped words are read from the top nibble down, flipped
 // words from the bottom nibble up; t is pre-rotated so the current nibble*2 sits in bits 1-4.
 // Returns the rotated word: non-flip ends rotated left by 1, flip ends rotated left by 5.
-template<bool Flip,int DX,bool Shadow,bool Minify,bool Clip>
-SPRITE_INLINE uint32_t sprite_pixels(uint32_t w,uint16_t*& dst,short& acc,short hz,short unit,const uint16_t* table,const uint16_t* lo,unsigned span){
+template<typename P,bool Flip,int DX,bool Shadow,bool Minify,bool Clip>
+SPRITE_INLINE uint32_t sprite_pixels(uint32_t w,P*& dst,short& acc,short hz,short unit,const uint16_t* table,const P* lo,unsigned span){
     uint32_t t=Flip?sprite_rol(w,1):sprite_rol(w,5);
     SPRITE_KEEP(t);
-#define SPRITE_NEXT_PIXEL() t=Flip?sprite_ror(t,4):sprite_rol(t,4);SPRITE_KEEP(t);sprite_pixel<DX,Shadow,Minify,Clip>(dst,acc,hz,unit,sprite_entry(table,t),lo,span)
-    sprite_pixel<DX,Shadow,Minify,Clip>(dst,acc,hz,unit,sprite_entry(table,t),lo,span);
+#define SPRITE_NEXT_PIXEL() t=Flip?sprite_ror(t,4):sprite_rol(t,4);SPRITE_KEEP(t);sprite_pixel<P,DX,Shadow,Minify,Clip>(dst,acc,hz,unit,sprite_entry(table,t),lo,span)
+    sprite_pixel<P,DX,Shadow,Minify,Clip>(dst,acc,hz,unit,sprite_entry(table,t),lo,span);
     SPRITE_NEXT_PIXEL();SPRITE_NEXT_PIXEL();SPRITE_NEXT_PIXEL();SPRITE_NEXT_PIXEL();
     SPRITE_NEXT_PIXEL();SPRITE_NEXT_PIXEL();SPRITE_NEXT_PIXEL();
 #undef SPRITE_NEXT_PIXEL
     return t;
 }
 // Rare path: word overlapping the clip edge.  Only writes; the caller advances dst/acc.
-template<bool Flip,int DX,bool Shadow,bool Minify>
-SPRITE_NOINLINE void sprite_word_clipped(uint32_t w,uint16_t* dst,short acc,short hz,const uint16_t* table,const uint16_t* lo,unsigned span){
-    sprite_pixels<Flip,DX,Shadow,Minify,true>(w,dst,acc,hz,0x200,table,lo,span);
+template<typename P,bool Flip,int DX,bool Shadow,bool Minify>
+SPRITE_NOINLINE void sprite_word_clipped(uint32_t w,P* dst,short acc,short hz,const uint16_t* table,const P* lo,unsigned span){
+    sprite_pixels<P,Flip,DX,Shadow,Minify,true>(w,dst,acc,hz,0x200,table,lo,span);
 }
 struct SpriteRowSetup {
     short hz,r;
@@ -97,17 +97,17 @@ struct SpriteRowSetup {
 // Every nibble 0 or 15 <=> the bits of each nibble are equal.
 SPRITE_INLINE bool sprite_word_clear(uint32_t w){return ((w^(w<<1))&0xeeeeeeeeu)==0;}
 // Rows whose 16-bit word index could wrap: index arithmetic as in the reference loop.
-template<bool Flip,int DX,bool Shadow,bool Minify>
-SPRITE_NOINLINE uint16_t sprite_row_wrapped(const uint32_t* bank,uint16_t* row,uint16_t address,int start_x,const SpriteRowSetup& s){
+template<typename P,bool Flip,int DX,bool Shadow,bool Minify>
+SPRITE_NOINLINE uint16_t sprite_row_wrapped(const uint32_t* bank,P* row,uint16_t address,int start_x,const SpriteRowSetup& s){
     uint16_t scratch=uint16_t(address+(Flip?1:-1));
-    uint16_t* dst=row+start_x+(DX>0?0:1);
-    uint16_t* const stop=row+s.stop;
-    const uint16_t* const lo=row+s.left;
+    P* dst=row+start_x+(DX>0?0:1);
+    P* const stop=row+s.stop;
+    const P* const lo=row+s.left;
     short acc=0;
     while(DX>0?dst<stop:dst>=stop){
         scratch=uint16_t(scratch+(Flip?-1:1));
         const uint32_t w=bank[scratch];
-        if(!sprite_word_clear(w))sprite_word_clipped<Flip,DX,Shadow,Minify>(w,dst,acc,s.hz,s.table,lo,s.span);
+        if(!sprite_word_clear(w))sprite_word_clipped<P,Flip,DX,Shadow,Minify>(w,dst,acc,s.hz,s.table,lo,s.span);
         acc-=s.r;dst+=DX*s.q;if(acc<0){acc+=s.hz;dst+=DX;}
         if((w&(Flip?0x0f000000u:0x000000f0u))==(Flip?0x0f000000u:0x000000f0u))break;
     }
@@ -121,10 +121,10 @@ SPRITE_INLINE bool sprite_word_end(uint32_t w){
     return (uint16_t(w)&0x00f0)==0x00f0;
 }
 // A word that is transparent or touches the clip edge: draw clipped, then take the O(1) step.
-template<bool Flip,int DX,bool Shadow,bool Minify>
-SPRITE_INLINE bool sprite_edge_word(const uint32_t*& src,uint16_t*& dst,short& acc,short hz,short r,int q,const uint16_t* table,uint16_t* row,const SpriteRowSetup& s){
+template<typename P,bool Flip,int DX,bool Shadow,bool Minify>
+SPRITE_INLINE bool sprite_edge_word(const uint32_t*& src,P*& dst,short& acc,short hz,short r,int q,const uint16_t* table,P* row,const SpriteRowSetup& s){
     const uint32_t w=Flip?*--src:*src++;
-    if(!sprite_word_clear(w))sprite_word_clipped<Flip,DX,Shadow,Minify>(w,dst,acc,hz,table,row+s.left,s.span);
+    if(!sprite_word_clear(w))sprite_word_clipped<P,Flip,DX,Shadow,Minify>(w,dst,acc,hz,table,row+s.left,s.span);
     acc-=r;dst+=DX*q;if(acc<0){acc+=hz;dst+=DX;}
     return sprite_word_end<Flip>(w);
 }
@@ -132,21 +132,21 @@ SPRITE_INLINE bool sprite_edge_word(const uint32_t*& src,uint16_t*& dst,short& a
 // words before the clip window, words whose every output is inside it, words after it.
 // Only the middle phase draws without per-pixel clipping, and it needs one bound test per word
 // (its bound also keeps it on screen).  Kept out of line so the word loop gets the registers.
-template<bool Flip,int DX,bool Shadow,bool Minify>
-SPRITE_NOINLINE const uint32_t* sprite_row_words(const uint32_t* src,uint16_t* row,uint16_t* dst,const SpriteRowSetup& s){
+template<typename P,bool Flip,int DX,bool Shadow,bool Minify>
+SPRITE_NOINLINE const uint32_t* sprite_row_words(const uint32_t* src,P* row,P* dst,const SpriteRowSetup& s){
     const uint16_t* const table=s.table;
     const short hz=s.hz,r=s.r;
     const int q=s.q;
     short acc=0;
     short unit=0x200;SPRITE_KEEP(unit);
-    uint16_t* const stop=row+s.stop;
+    P* const stop=row+s.stop;
     if(DX>0){
-        uint16_t* const fast_lo=row+s.fast_lo;
+        P* const fast_lo=row+s.fast_lo;
         while(dst<fast_lo){
             if(dst>=stop)return src;
-            if(sprite_edge_word<Flip,DX,Shadow,Minify>(src,dst,acc,hz,r,q,table,row,s))return src;
+            if(sprite_edge_word<P,Flip,DX,Shadow,Minify>(src,dst,acc,hz,r,q,table,row,s))return src;
         }
-        uint16_t* const fast_hi=row+s.fast_hi;
+        P* const fast_hi=row+s.fast_hi;
         while(dst<=fast_hi){
             const uint32_t w=Flip?*--src:*src++;
             if(sprite_word_clear(w)){
@@ -155,19 +155,19 @@ SPRITE_NOINLINE const uint32_t* sprite_row_words(const uint32_t* src,uint16_t* r
                 continue;
             }
             // t is w rotated left by 1 (non-flip) or 5 (flip); test the end marker there.
-            const uint32_t t=sprite_pixels<Flip,DX,Shadow,Minify,false>(w,dst,acc,hz,unit,table,0,0);
+            const uint32_t t=sprite_pixels<P,Flip,DX,Shadow,Minify,false>(w,dst,acc,hz,unit,table,0,0);
             if(Flip?(t&0xe0000001u)==0xe0000001u:(uint16_t(t)&0x01e0)==0x01e0)return src;
         }
         while(dst<stop){
-            if(sprite_edge_word<Flip,DX,Shadow,Minify>(src,dst,acc,hz,r,q,table,row,s))return src;
+            if(sprite_edge_word<P,Flip,DX,Shadow,Minify>(src,dst,acc,hz,r,q,table,row,s))return src;
         }
     }else{
-        uint16_t* const fast_hi=row+s.fast_hi;
+        P* const fast_hi=row+s.fast_hi;
         while(dst>fast_hi){
             if(dst<stop)return src;
-            if(sprite_edge_word<Flip,DX,Shadow,Minify>(src,dst,acc,hz,r,q,table,row,s))return src;
+            if(sprite_edge_word<P,Flip,DX,Shadow,Minify>(src,dst,acc,hz,r,q,table,row,s))return src;
         }
-        uint16_t* const fast_lo=row+s.fast_lo;
+        P* const fast_lo=row+s.fast_lo;
         while(dst>=fast_lo){
             const uint32_t w=Flip?*--src:*src++;
             if(sprite_word_clear(w)){
@@ -175,17 +175,17 @@ SPRITE_NOINLINE const uint32_t* sprite_row_words(const uint32_t* src,uint16_t* r
                 if(sprite_word_end<Flip>(w))return src;
                 continue;
             }
-            const uint32_t t=sprite_pixels<Flip,DX,Shadow,Minify,false>(w,dst,acc,hz,unit,table,0,0);
+            const uint32_t t=sprite_pixels<P,Flip,DX,Shadow,Minify,false>(w,dst,acc,hz,unit,table,0,0);
             if(Flip?(t&0xe0000001u)==0xe0000001u:(uint16_t(t)&0x01e0)==0x01e0)return src;
         }
         while(dst>=stop){
-            if(sprite_edge_word<Flip,DX,Shadow,Minify>(src,dst,acc,hz,r,q,table,row,s))return src;
+            if(sprite_edge_word<P,Flip,DX,Shadow,Minify>(src,dst,acc,hz,r,q,table,row,s))return src;
         }
     }
     return src;
 }
-template<bool Flip,int DX,bool Shadow,bool Minify>
-static uint16_t sprite_visible(const uint32_t* bank,uint16_t* frame,const SpriteFastParams& p){
+template<typename P,bool Flip,int DX,bool Shadow,bool Minify>
+static uint16_t sprite_visible(const uint32_t* bank,P* frame,const SpriteFastParams& p){
     const int width=p.width,screen_height=p.screen_height;
     const int top=p.top,count=p.rows,dy=p.y_direction,start_x=p.x;
     int first=dy>0?-top:top-screen_height+1;
@@ -219,13 +219,13 @@ static uint16_t sprite_visible(const uint32_t* bank,uint16_t* frame,const Sprite
     const int row_step=dy>0?width:-width;
     unsigned words_seen=0;   // most words one row read (each word moves dst by q or q+1 pixels)
     for(int y=first;y<last;y++){
-        uint16_t* const row=frame+row_index;
+        P* const row=frame+row_index;
         const uint16_t index=uint16_t(address);
         const bool wraps=Flip?unsigned(index)+1<words_max:unsigned(index)+words_max>0x10000u;
         if(wraps){
-            scratch=sprite_row_wrapped<Flip,DX,Shadow,Minify>(bank,row,index,start_x,s);
+            scratch=sprite_row_wrapped<P,Flip,DX,Shadow,Minify>(bank,row,index,start_x,s);
         }else{
-            const uint32_t* src=sprite_row_words<Flip,DX,Shadow,Minify>(bank+index+(Flip?1:0),row,row+start_x+(DX>0?0:1),s);
+            const uint32_t* src=sprite_row_words<P,Flip,DX,Shadow,Minify>(bank+index+(Flip?1:0),row,row+start_x+(DX>0?0:1),s);
             scratch=uint16_t(src-bank-(Flip?0:1));
         }
         const unsigned n=uint16_t(Flip?index-scratch:scratch-index)+1u;
@@ -240,17 +240,18 @@ static uint16_t sprite_visible(const uint32_t* bank,uint16_t* frame,const Sprite
     }
     return scratch;
 }
-template<bool Flip,int DX,bool Shadow>
-static uint16_t sprite_scale(const uint32_t* src,uint16_t* dst,const SpriteFastParams& p){
-    return p.hzoom>=0x200?sprite_visible<Flip,DX,Shadow,true>(src,dst,p):sprite_visible<Flip,DX,Shadow,false>(src,dst,p);
+template<typename P,bool Flip,int DX,bool Shadow>
+static uint16_t sprite_scale(const uint32_t* src,P* dst,const SpriteFastParams& p){
+    return p.hzoom>=0x200?sprite_visible<P,Flip,DX,Shadow,true>(src,dst,p):sprite_visible<P,Flip,DX,Shadow,false>(src,dst,p);
 }
-template<bool Flip,int DX>
-static uint16_t sprite_shadow(const uint32_t* src,uint16_t* dst,const SpriteFastParams& p,bool shadow){
-    return shadow?sprite_scale<Flip,DX,true>(src,dst,p):sprite_scale<Flip,DX,false>(src,dst,p);
+template<typename P,bool Flip,int DX>
+static uint16_t sprite_shadow(const uint32_t* src,P* dst,const SpriteFastParams& p,bool shadow){
+    return shadow?sprite_scale<P,Flip,DX,true>(src,dst,p):sprite_scale<P,Flip,DX,false>(src,dst,p);
 }
-static uint16_t sprite_fast_dispatch(const uint32_t* src,uint16_t* dst,const SpriteFastParams& p,bool flip,bool positive,bool shadow){
-    if(flip)return positive?sprite_shadow<true,1>(src,dst,p,shadow):sprite_shadow<true,-1>(src,dst,p,shadow);
-    return positive?sprite_shadow<false,1>(src,dst,p,shadow):sprite_shadow<false,-1>(src,dst,p,shadow);
+template<typename P>
+static uint16_t sprite_fast_dispatch(const uint32_t* src,P* dst,const SpriteFastParams& p,bool flip,bool positive,bool shadow){
+    if(flip)return positive?sprite_shadow<P,true,1>(src,dst,p,shadow):sprite_shadow<P,true,-1>(src,dst,p,shadow);
+    return positive?sprite_shadow<P,false,1>(src,dst,p,shadow):sprite_shadow<P,false,-1>(src,dst,p,shadow);
 }
 #undef SPRITE_INLINE
 #undef SPRITE_NOINLINE

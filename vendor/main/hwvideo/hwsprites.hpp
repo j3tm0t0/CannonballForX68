@@ -20,7 +20,8 @@ public:
     void write(const uint16_t adr, const uint16_t data);
     void render(const uint8_t);
     void capture_entry(const uint16_t*,uint16_t*);
-    void capture_entry_table(const uint16_t*,uint16_t*,const uint16_t* table,int* xbounds=nullptr);   // r026e (xbounds: see SpriteFastParams)
+    void capture_entry_table(const uint16_t*,uint16_t*,const uint16_t* table,int* xbounds=nullptr);
+    void capture_entry_table8(const uint16_t*,uint8_t*,const uint16_t* table,int* xbounds=nullptr);   // 8-bit pixels   // r026e (xbounds: see SpriteFastParams)
 #ifndef OR_X68K
     void render_reference(const uint8_t);
     void save_render_state(uint16_t*) const;
