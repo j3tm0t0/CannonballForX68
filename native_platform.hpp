@@ -81,7 +81,7 @@ static int native_audio_game=1;   // main.cpp: 0 for the display test (no ROMs, 
 extern "C"{extern char _start[],_etext[];uint32_t prof_text_size=0;uint32_t prof_hist[(0x140000>>4)+1];}
 #endif
 }
-static RoadFrame road_frames[3];   // r029: one shown, one waiting for the next vertical blank, one being built
+alignas(16) static RoadFrame road_frames[3];   // r029: one shown, one waiting for the next vertical blank, one being built
 // r029: frame pacing (Masa compared the three on XM6 and chose VSYNC, 2026-11-08):
 //  VSYNC (default): one picture every 2 screen refreshes (55.46 Hz): even, 27.7 pictures a
 //                   second; the game runs about 8% slower than real time.

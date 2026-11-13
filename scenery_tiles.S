@@ -15,6 +15,7 @@
 /* LEARN=1 builds scenery_tile_rows_learn, which takes a fifth argument met_q (256 bytes)
    and sets met_q[code] for every pixel of a row that has pixels (code 0 included: not read). */
 .macro TILE_ROWS name,learn
+.balignw 16,0x4e71
 .globl \name
 \name:
  movem.l %d2-%d7/%a2-%a3,-(%sp)
@@ -95,6 +96,7 @@ TILE_ROWS scenery_tile_rows_learn,1
    uint32_t scenery_tile_finish(uint16_t* src, uint32_t rowbits, const uint32_t* rowLR, uint32_t* enc)
    Copies the 32 longs of rowLR to enc, clears the capture rows named in rowbits, and returns
    the FNV-1a hash taken over left,right of row 0..15 (the order of the C loop). */
+.balignw 16,0x4e71
 .globl scenery_tile_finish
 scenery_tile_finish:
  movem.l %d2-%d4,-(%sp)
@@ -141,6 +143,7 @@ scenery_tile_finish:
      encp[code>>4] = pattern (32 longs, zeroed by the caller) of the block of that pixel code
    Every pixel code must be < 256 (scenery_tile_rows returned a result for this tile).
    ORs each pixel's nibble into the pattern of its block and clears the rows named in rowbits. */
+.balignw 16,0x4e71
 .globl scenery_tile_split
 scenery_tile_split:
  movem.l %d2-%d6/%a2,-(%sp)
@@ -201,6 +204,7 @@ scenery_tile_split:
  rts
 
 /* uint32_t scenery_pcg_hash(const uint32_t* enc): FNV-1a over left,right of row 0..15 */
+.balignw 16,0x4e71
 .globl scenery_pcg_hash
 scenery_pcg_hash:
  movem.l %d2-%d3,-(%sp)

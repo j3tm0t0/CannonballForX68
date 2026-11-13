@@ -7,6 +7,7 @@
 .globl road_raster_irq
 .lcomm vblank_frame,4
 .lcomm vblank_deferred,2
+.balignw 16,0x4e71
 road_vblank_irq:
  /* Preserve every data/address register across the C callback and its helpers. */
  movem.l %d0-%d7/%a0-%a6,-(%sp)
@@ -85,6 +86,7 @@ vblank_work:
  /* r031: the sound code, 125 times a second */
  jsr audio_vblank
  rts
+.balignw 16,0x4e71
 road_raster_irq:
  move.l %a0,-(%sp)
 #ifdef CBX68_PROF
