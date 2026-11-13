@@ -1200,7 +1200,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // the longs that differ between two patterns, and what writing them costs (2 a run + the data)
  // A mask in many short runs can cost more than the whole pattern (34): then the whole pattern.
  auto mask_cost=[](uint32_t m)->unsigned{return unsigned(__builtin_popcount(m))+2u*unsigned(__builtin_popcount(m&~(m<<1)));};
- auto diff_mask=[&](const uint32_t*a,const uint32_t*b)->uint32_t{uint32_t m=0;for(unsigned q=0;q<32;q++)if(a[q]!=b[q])m|=1u<<q;return mask_cost(m)>34?0xffffffffu:m;};
+ auto diff_mask=[&](const uint32_t*a,const uint32_t*b)->uint32_t{uint32_t m=0;for(int q=31;q>=0;q--)m=(m<<1)|uint32_t(a[q]!=b[q]);return mask_cost(m)>34?0xffffffffu:m;};
  S.car_dropped=0;
  for(unsigned q=0;q<nu;q++){const unsigned u=users[q];const bool is_car=u>=SCENERY_MAX;
   const int r=is_car?int(car.registers[u-SCENERY_MAX][1]-16)/16:S.sprite[u].row;
@@ -1262,10 +1262,14 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
    S.jobs[off++]=(uint32_t(uint16_t(sp.x))<<16)|uint16_t(sp.y);
    S.jobs[off++]=(uint32_t(((S.first_block+sp.block)<<8)|(pattern&255))<<16)|3u;}
   else{unsigned pattern=car_pattern_slot(j.res);const uint32_t*p=pcg_of(j.sprite);
-   for(unsigned q=0;q<32;){if(!((m>>q)&1)){++q;continue;}
-    unsigned e=q+1;while(e<32&&((m>>e)&1))++e;
-    S.jobs[off++]=0xeb8000UL+pattern*128+q*4;S.jobs[off++]=e-q-1;
-    memcpy(S.jobs+off,p+q,(e-q)*4);off+=e-q;q=e;}}
+   uint32_t*d=S.jobs+off;const uint32_t at=0xeb8000UL+pattern*128;
+   if(m==0xffffffffu){*d++=at;*d++=31;for(unsigned q=0;q<32;q++)*d++=p[q];}
+   else for(unsigned q=0;m;){
+    while(!(m&1)){m>>=1;++q;}
+    uint32_t*const head=d;d+=2;const unsigned first=q;
+    do{*d++=p[q++];m>>=1;}while(m&1);
+    head[0]=at+first*4;head[1]=q-first-1;}
+   off=unsigned(d-S.jobs);}
  };
  static int16_t head[SCENERY_LINES+1],next_job[2*(SCENERY_MAX+128)];
  for(unsigned l=0;l<=SCENERY_LINES;l++)head[l]=-1;
