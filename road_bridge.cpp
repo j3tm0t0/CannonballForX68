@@ -98,20 +98,7 @@ void road_build(const HWRoad&r,const uint16_t*pal,RoadFrame&f){
  unsigned control=r.road_control&3;
  for(int y=0;y<224;y++){
   RoadRow& row=f.rows[y];unsigned d[2]={r.ramBuff[y],r.ramBuff[256+y]};
-  unsigned ix[2]={(r.road_control&4)?unsigned(y):(d[0]&511),(r.road_control&4)?unsigned(y+256):(d[1]&511)};
-  unsigned cw[2]={r.ramBuff[0x600+ix[0]],r.ramBuff[0x600+ix[1]]};
-  unsigned co[2][5];colors(r,0,d[0],cw[0],co[0]);colors(r,1,d[1],cw[1],co[1]);
   bool on[2]={(d[0]&2048)==0&&(control!=3),(d[1]&2048)==0&&(control!=0)};
-  unsigned primary=(control==2||control==3)?1:0,secondary=1-primary;
-  uint32_t xy[2];int col[2];
-  for(unsigned i=0;i<2;i++){
-   col[i]=column(r,i,ix[i]);int tex=480;
-   if(on[i]&&col[i]>=-320&&col[i]<512)tex=road_atlas.vtab[col[i]+320]+road_atlas.lrow[(d[i]>>1)&255];
-   else if(on[i])++f.variant_miss;
-   xy[i]=scroll(tex==480?0:col[i],tex,y);
-  }
-  // Colour of a pixel where both roads are off-road (priority map, both pixels 3).
-  unsigned offroad=(control<=1)?co[0][3]:co[1][3];
   row.bg_y=row.bg_far_y=(256-y)&511;row.control=0x004c;
   row.next=y==223?1023:72+(y+1)*2;
   unsigned mode;
@@ -123,6 +110,20 @@ void road_build(const HWRoad&r,const uint16_t*pal,RoadFrame&f){
    row.bg0=row.bg1=scroll(0,480,y);row.gpage=f.gv_base;row.road_enable=0x0210;mode=ROW_HIDDEN;
   }else{
    ++f.visible;
+   // (the colours, columns and textures are only needed on lines that show a road)
+   unsigned ix[2]={(r.road_control&4)?unsigned(y):(d[0]&511),(r.road_control&4)?unsigned(y+256):(d[1]&511)};
+   unsigned cw[2]={r.ramBuff[0x600+ix[0]],r.ramBuff[0x600+ix[1]]};
+   unsigned co[2][5];colors(r,0,d[0],cw[0],co[0]);colors(r,1,d[1],cw[1],co[1]);
+   unsigned primary=(control==2||control==3)?1:0,secondary=1-primary;
+   uint32_t xy[2];int col[2];
+   for(unsigned i=0;i<2;i++){
+    col[i]=column(r,i,ix[i]);int tex=480;
+    if(on[i]&&col[i]>=-320&&col[i]<512)tex=road_atlas.vtab[col[i]+320]+road_atlas.lrow[(d[i]>>1)&255];
+    else if(on[i])++f.variant_miss;
+    xy[i]=scroll(tex==480?0:col[i],tex,y);
+   }
+   // Colour of a pixel where both roads are off-road (priority map, both pixels 3).
+   unsigned offroad=(control<=1)?co[0][3]:co[1][3];
    // Show exactly the higher-priority road that has pixels on screen; the other one (if on
    // screen) goes to BG1.
    bool vis[2];
