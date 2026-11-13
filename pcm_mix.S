@@ -13,6 +13,7 @@
    (The chip's samples are the bytes less 0x80: the caller takes 0x80*vol off afterwards.) */
 .text
 .even
+.balignw 16,0x4e71
 .globl pcm_mix_run
 pcm_mix_run:
  movem.l %d2-%d7,-(%sp)

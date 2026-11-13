@@ -18,7 +18,12 @@ bool hud_enabled=true;   // r027: H key, score/time/speed on the text plane
 uint32_t background_columns=0,car_overflows=0,car_tiles_total=0,car_frames=0,car_text_frames=0,visual_frames[4]={0,0,0,0};
 unsigned car_peak_tiles=0,car_peak_patterns=0,car_peak_line=0;
 typedef uint32_t __attribute__((may_alias)) alias_u32;
-alignas(4) static uint16_t capture_pixels[320*224];
+// CBX68_PAD (timing check only): shifts the code and data placed after this file by a few bytes;
+// with the 16-byte alignment the timing must not change.
+#ifdef CBX68_PAD
+__asm__(".text\n .short 0x4e71,0x4e71,0x4e71\n.data\n .skip 6\n.bss\n .skip 6\n.text");
+#endif
+alignas(16) static uint16_t capture_pixels[320*224];
 static const uint16_t* capture_palette=0;
 static const uint16_t* background_palette=0;
 static volatile uint16_t text_active_bank=0;
@@ -32,7 +37,7 @@ static uint32_t background_far_checks=0,background_data_errors=0,background_pale
 static bool background_ready=false,background_attempted=false,background_refresh=false,background_palette_refresh=false;
 static uint32_t background_rebuilds=0,background_capacity_waits=0,background_source_frames=0;
 // PC: the background bytes of the GVRAM. X68000 (r031h): a copy of them in main memory.
-static uint8_t background_ring[512*512];
+alignas(16) static uint8_t background_ring[512*512];
 static int mod(int v,int n){v%=n;return v<0?v+n:v;}
 static uint16_t tile_word(unsigned a){const uint8_t*p=video.tile_layer->text_ram;return (p[a]<<8)|p[a+1];}
 // A visible black pixel must not use the hardware transparent colour word.
@@ -837,7 +842,7 @@ static void scenery_print(){
 //    SCENERY_LINE_BUDGET longs per line. Fresh ones are loaded in the vertical blank.
 //    What does not fit is left out (counted as dropped).
 // ---------------------------------------------------------------------------
-alignas(4) static uint16_t scenery_pixels[320*224];
+alignas(16) static uint16_t scenery_pixels[320*224];
 static int scenery_low=224,scenery_high=0;
 static uint8_t scenery_map[8192];static const uint16_t*scenery_palette=0;
 static uint32_t scenery_diag[8];bool scenery_enabled=true;   // G key: roadside objects on/off (the car patterns are scheduled either way)
