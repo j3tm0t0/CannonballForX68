@@ -18,6 +18,7 @@
     See license.txt for more details.
 ***************************************************************************/
 
+#include <cstring>
 #include "stdint.hpp"
 #include "globals.hpp"
 #include "assets.hpp"
@@ -1612,6 +1613,12 @@ void ORoad::copy_bg_color()
     uint32_t dst = HW_BGCOLOR;
 
     // Copy 1K
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    // X68000: the ROM bytes already are the big-endian words of road RAM, and the 512 words
+    // (road RAM words 0x600..0x7ff) do not wrap: one block copy, the same words as the loop below.
+    memcpy(&hwroad.ram[(dst >> 1) & 0x7FF], assets.asset1p->asset + src, 1024);
+    return;
+#endif
     for (int i = 0; i < 32; i++)
     {
         hwroad.write32(&dst, assets.asset1p->read32(&src));
