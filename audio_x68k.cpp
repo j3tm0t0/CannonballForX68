@@ -63,6 +63,33 @@ static void opm_write(unsigned r,unsigned v){
  }
  ++audio_fm_writes;
 }
+// r032: the chip stays busy for 17 us after a write, and the sound code makes about 32 writes a
+// vertical blank, most of them one right after the other: each waited for the one before it.
+// Inside audio_vblank the writes are now kept in a queue and go out, in the same order, while the
+// PCM part is mixed and coded (fm_pump: one write when the chip is free, no waiting). What is
+// left when the PCM part is done is written with the wait, as before: the queue is empty when
+// audio_vblank returns, and a write goes out later than before by less than one run of
+// audio_vblank. Outside audio_vblank (start-up, audio_silence) writes go straight to the chip.
+enum {FM_QUEUE=256};
+static uint16_t fm_queue[FM_QUEUE];static unsigned fm_head=0,fm_count=0;static bool fm_queue_on=false;
+extern "C"{volatile uint32_t audio_fm_free=0,audio_fm_waited=0,audio_fm_queue_max=0,audio_vblank_max=0;}   // queued writes that went out without / with a wait
+static void fm_flush(){
+ for(;fm_head<fm_count;fm_head++){opm_write(fm_queue[fm_head]>>8,fm_queue[fm_head]&255);++audio_fm_waited;}
+ fm_head=fm_count=0;
+}
+static inline void fm_pump(){
+ if(fm_head>=fm_count)return;
+ if(*opm_data()&0x80)return;
+ const unsigned r=fm_queue[fm_head]>>8;unsigned v=fm_queue[fm_head]&255;
+ uint16_t sr;__asm__ volatile("move.w %%sr,%0\n ori.w #0x0700,%%sr":"=d"(sr)::"memory");
+ const bool free=!(*opm_data()&0x80);
+ if(free){
+  if(r==0x1b)v=(v&0x03)|(*(volatile uint8_t*)0x09daUL&0xc0);
+  *opm_reg()=uint8_t(r);
+  *opm_data()=uint8_t(v);}
+ __asm__ volatile("move.w %0,%%sr"::"d"(sr):"memory");
+ if(free){++fm_head;++audio_fm_writes;++audio_fm_free;}
+}
 // ---- YM2151: the real chip ----
 YM2151::YM2151(float,uint32_t){irq=false;}
 YM2151::~YM2151(){}
@@ -81,6 +108,11 @@ void YM2151::write_reg(int r,int v){
  if(!audio_fm_enabled)return;
  // register 0x1B: bits 7 and 6 are the X68000's ADPCM clock select and FDD ready lines (CT1/CT2).
  // opm_write keeps what the system has set and takes only the LFO waveform from the game.
+ if(fm_queue_on){
+  if(fm_count>=FM_QUEUE)fm_flush();              // (full: everything out, in order, with the wait)
+  fm_queue[fm_count++]=uint16_t((r<<8)|v);
+  if(fm_count-fm_head>audio_fm_queue_max)audio_fm_queue_max=fm_count-fm_head;
+  return;}
  opm_write(unsigned(r),unsigned(v));
 }
 // ---- Sega PCM on the X68000's ADPCM (r031c) ----
@@ -166,6 +198,7 @@ static void pcm_mix_channels(uint8_t*ram,const uint8_t*rom,uint32_t rgnmask,uint
  // (the index within a bank has 16 bits: a mask with its low 16 bits set changes none)
  const bool plain=(rgnmask&0xffffu)==0xffffu;
  for(unsigned ch=0;ch<16;ch++){uint8_t*regs=ram+8*ch;
+  fm_pump();
   if(regs[0x86]&1)continue;
   const uint8_t*bank=rom+(uint32_t(regs[0x86]&0x70)<<12);
   uint32_t addr=(uint32_t(regs[0x85])<<16)|(uint32_t(regs[0x84])<<8)|low[ch];
@@ -238,11 +271,15 @@ static void pcm_fill(){
  pcm_mix_channels(pcm_regs,pcm_rom,pcm_mask,pcm_low,bytes*2);
  const int32_t*m=pcm_mix;const int32_t bias=pcm_bias;
  int value=ad_value,index=ad_index;unsigned at_w=pcm_write;uint8_t*const ring=pcm_ring;
- for(unsigned k=0;k<bytes;k++){
-  int a=int((m[0]-bias)>>PCM_SHIFT),b=int((m[1]-bias)>>PCM_SHIFT);m+=2;
-  if(a>2047)a=2047;else if(a<-2048)a=-2048;if(b>2047)b=2047;else if(b<-2048)b=-2048;
-  const unsigned lo=adpcm_code(a,value,index),hi=adpcm_code(b,value,index);
-  ring[at_w]=uint8_t(lo|(hi<<4));at_w=(at_w+1)%PCM_RING;}
+ // (4 bytes at a time, with a look at the FM queue in between: the coder's state stays in registers)
+ for(unsigned left=bytes;left;){
+  const unsigned part=left<4?left:4;left-=part;
+  for(unsigned k=0;k<part;k++){
+   int a=int((m[0]-bias)>>PCM_SHIFT),b=int((m[1]-bias)>>PCM_SHIFT);m+=2;
+   if(a>2047)a=2047;else if(a<-2048)a=-2048;if(b>2047)b=2047;else if(b<-2048)b=-2048;
+   const unsigned lo=adpcm_code(a,value,index),hi=adpcm_code(b,value,index);
+   ring[at_w]=uint8_t(lo|(hi<<4));at_w=(at_w+1)%PCM_RING;}
+  fm_pump();}
  ad_value=value;ad_index=index;pcm_write=at_w;
  audio_pcm_bytes+=bytes;pcm_written+=bytes;
 }
@@ -278,6 +315,10 @@ void audio_vblank(){
  static uint16_t acc=0;
  if(audio_hold||!audio_enabled)return;
  acc=uint16_t(acc+audio_ticks_per_blank);
+#ifdef CBX68_TRACE
+ const unsigned t0=*(volatile uint8_t*)0xe88023UL;   // MFP Timer C: counts down from 200, 50 us a count
+#endif
+ fm_queue_on=true;
  while(acc>=1000){acc=uint16_t(acc-1000);
   osoundint.play_queued_sound();
 #ifdef CBX68_AUDIO_LOG
@@ -288,4 +329,8 @@ void audio_vblank(){
   osound.tick();
   ++audio_ticks_done;}
  pcm_fill();
+ fm_queue_on=false;fm_flush();
+#ifdef CBX68_TRACE
+ {const unsigned t1=*(volatile uint8_t*)0xe88023UL,d=(t0+200-t1)%200;if(d>audio_vblank_max)audio_vblank_max=d;}
+#endif
 }
