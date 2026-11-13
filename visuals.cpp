@@ -835,13 +835,15 @@ uint32_t scenery_fine_total=0,scenery_fine_capture=0,scenery_fine_max=0,scenery_
 // with the sprite display on costs about 1.1 us on XEiJ (IOSPEED line of the report): with 96 a
 // quarter of the job lists finished after their tile row had begun (16 MHz, start scene), with
 // 64 none did. On the X68000 the start-up code measures the write time and sets the budget
-// (visuals_set_line_budget); -DCBX68_BUDGET=N fixes it.
+// (visuals_set_line_budget, 38 to 67); -DCBX68_BUDGET=N fixes it.
 #ifdef CBX68_BUDGET
 static const unsigned SCENERY_LINE_BUDGET=CBX68_BUDGET;
 void visuals_set_line_budget(unsigned){}
 #else
 static unsigned SCENERY_LINE_BUDGET=64;
-void visuals_set_line_budget(unsigned longs){SCENERY_LINE_BUDGET=longs<38?38:longs>96?96:longs;}   // 38: one pattern and one sprite
+// 38: one pattern and one sprite. 67: never two whole patterns (68 longs) in one line: that alone is
+// more than a line period at the 0.93 us a long the sprite controller takes on XEiJ whatever the CPU.
+void visuals_set_line_budget(unsigned longs){SCENERY_LINE_BUDGET=longs<38?38:longs>67?67:longs;}
 #endif
 unsigned visuals_line_budget(){return SCENERY_LINE_BUDGET;}
 #ifndef CBX68_REWRITTEN_FIRST
@@ -851,6 +853,10 @@ static const bool SCENERY_REWRITTEN_FIRST=CBX68_REWRITTEN_FIRST;
 #ifndef CBX68_DIFF
 #define CBX68_DIFF 1
 #endif
+#ifndef CBX68_PACKET_REUSE
+#define CBX68_PACKET_REUSE 1
+#endif
+static const bool SCENERY_PACKET_REUSE=CBX68_PACKET_REUSE;static uint32_t scenery_packet_reuses=0;
 static const bool SCENERY_DIFF=CBX68_DIFF;   // a pattern rewritten by a line job: only the longs that differ from what it held
 static uint32_t scenery_start_longs=0,scenery_restart_longs=0,scenery_line_longs=0;   // job list sizes, summed over the frames
 #ifndef OR_X68K
@@ -942,6 +948,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // a learning frame: the same picture marks the same colours, and those bits are already set
  // (bank_seen_mask only gains bits), so the pass would change nothing.
  static bool reuse_learned=false;
+ static uint32_t packet_gen=0;   // changes whenever the roadside sprites of a frame differ from the frame before
  const bool reuse=key_ok&&(!learn||reuse_learned)&&reuse_valid&&key_len==reuse_len&&!memcmp(reuse_new,reuse_key,key_len*2);
  // 1. capture
 #ifdef OR_X68K
@@ -1156,7 +1163,8 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   else if(key_ok){c_count=S.count;c_blocks=S.blocks;c_dropped=S.dropped;c_dropped_banks=S.dropped_banks;memcpy(c_palette,S.palette,sizeof c_palette);
    memcpy(c_sprite,S.sprite,S.count*sizeof c_sprite[0]);memcpy(c_pcg,S.pcg,S.count*sizeof c_pcg[0]);memcpy(c_hash,sprite_hash,S.count*4);
    memcpy(reuse_key,reuse_new,key_len*2);reuse_len=key_len;reuse_valid=true;reuse_learned=learn;}
-  else reuse_valid=false;}
+  else reuse_valid=false;
+  if(!reuse)++packet_gen;}   // the sprites of this frame are not the kept ones any more
 #ifdef OR_X68K
  uint32_t ts=platform_fine_clock();scenery_fine_tiles+=ts-tp;
 #endif
@@ -1207,6 +1215,31 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   for(unsigned q=0;q<32;q++)car_pcg32[i][q]=(uint32_t(b[q*4])<<24)|(uint32_t(b[q*4+1])<<16)|(uint32_t(b[q*4+2])<<8)|b[q*4+3];
 #endif
  }
+ // r031: the whole packet of the frame before, when everything the steps below read is the same:
+ // the roadside sprites (packet_gen), the car's sprites and patterns, the score palettes. The
+ // numbers, patterns and job lists then come out the same, so they are copied (the lists with
+ // their addresses moved to this frame) instead of worked out again.
+ static uint32_t last_sig=0;static bool last_ok=false;static const SceneryPacket*last_S=0;static unsigned last_used=0;
+ static int32_t o_start=0,o_restart=0,o_line[224];static uint16_t o_head[6];static uint8_t o_kept[SCENERY_MAX];
+ static uint16_t o_car2[128],o_car3[128];static uint32_t o_longs[3];
+ uint32_t sig=2166136261UL;
+ {auto mix=[&](uint32_t x){sig^=x;sig*=16777619UL;};
+  mix(packet_gen);mix(car_sprites);mix(SCENERY_LINE_BUDGET);
+  for(unsigned i=0;i<car_sprites;i++){mix(car.registers[i][0]);mix(car.registers[i][1]);mix(car.registers[i][2]&0xff00u);mix(car.registers[i][3]);
+   for(unsigned q=0;q<32;q++)mix(car_pcg32[i][q]);}
+  mix(hud.active);mix(hud.bands);for(unsigned b=0;b<hud.bands;b++){mix(hud.band_first[b]);for(unsigned q=0;q<16;q++)mix(hud.band_pal[b][q]);}}
+ if(SCENERY_PACKET_REUSE&&reuse&&last_ok&&sig==last_sig){
+  S.kept=o_head[0];S.dropped=o_head[1];S.reused=o_head[2];S.line_longs_max=o_head[3];S.shared=o_head[4];S.car_dropped=o_head[5];
+  for(unsigned i=0;i<S.count;i++)S.sprite[i].kept=o_kept[i];
+  for(unsigned i=0;i<car_sprites;i++){car.registers[i][2]=o_car2[i];car.registers[i][3]=o_car3[i];}
+  if(last_S!=&S)memcpy(S.jobs,last_S->jobs,last_used*4);
+  S.start_job=scenery_ref(S,unsigned(o_start));S.restart_job=scenery_ref(S,unsigned(o_restart));
+  for(unsigned l=0;l<224;l++)if(o_line[l]>=0)S.line_job[l]=scenery_ref(S,unsigned(o_line[l]));
+  scenery_start_longs+=o_longs[0];scenery_restart_longs+=o_longs[1];scenery_line_longs+=o_longs[2];
+  last_S=&S;++scenery_packet_reuses;
+  return;
+ }
+ last_ok=false;
  auto pcg_of=[&](unsigned u)->const uint32_t*{return u>=SCENERY_MAX?car_pcg32[u-SCENERY_MAX]:S.pcg[u];};
  auto content_id=[&](unsigned u)->int{return u>=SCENERY_MAX?int(SCENERY_MAX+car.pattern_index[u-SCENERY_MAX]):int(u);};
  // the longs that differ between two patterns, and what writing them costs (2 a run + the data)
@@ -1292,14 +1325,16 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  for(unsigned l=0;l<=SCENERY_LINES;l++)head[l]=-1;
  for(int k=int(njobs)-1;k>=0;k--){unsigned l=jobs[k].line<0?SCENERY_LINES:unsigned(jobs[k].line);next_job[k]=head[l];head[l]=int16_t(k);}
  auto emit_pal=[&](unsigned b){if(off+300>SCENERY_JOB_LONGS){++scenery_overflow;return;}S.jobs[off++]=0xe82200UL;S.jobs[off++]=7;for(unsigned q=0;q<8;q++)S.jobs[off++]=(uint32_t(hud.band_pal[b][q*2])<<16)|hud.band_pal[b][q*2+1];};
- const unsigned first_off=off;S.start_job=scenery_ref(S,off);
+ const unsigned first_off=off;S.start_job=scenery_ref(S,off);o_start=int32_t(off);
+ {const uint32_t before[3]={scenery_start_longs,scenery_restart_longs,scenery_line_longs};o_longs[0]=before[0];o_longs[1]=before[1];o_longs[2]=before[2];}
+ for(unsigned l=0;l<224;l++)o_line[l]=-1;
  if(hud.active&&hud.bands)emit_pal(0);
  for(int k=head[SCENERY_LINES];k>=0;k=next_job[k])emit(jobs[k],0xffffffffu);
  S.jobs[off++]=0;
  scenery_start_longs+=off-first_off;
  const unsigned line_off=off;
  for(unsigned l=0;l<224;l++){if(!line_load[l])continue;
-  S.line_job[l]=scenery_ref(S,off);
+  S.line_job[l]=scenery_ref(S,off);o_line[l]=int32_t(off);
   for(unsigned b=1;b<hud.bands;b++)if(hud_line[b]==int(l))emit_pal(b);
   for(int k=head[l];k>=0;k=next_job[k])emit(jobs[k],jobs[k].mask);
   S.jobs[off++]=0;
@@ -1309,15 +1344,21 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // more): only the sprite numbers and patterns a line job has written, and of a pattern only
  // the longs that differ from what its last line job left.
  if(off+4096<=SCENERY_JOB_LONGS){
-  const unsigned restart_off=off;S.restart_job=scenery_ref(S,off);
+  const unsigned restart_off=off;S.restart_job=scenery_ref(S,off);o_restart=int32_t(off);
   if(hud.active&&hud.bands>1)emit_pal(0);
   for(int k=head[SCENERY_LINES];k>=0;k=next_job[k]){const SceneryJob&j=jobs[k];
    if(!j.pcg){if(s_rewritten[j.res])emit(j,0);}
    else if(p_rewritten[j.res])emit(j,SCENERY_DIFF?diff_mask(pcg_of(unsigned(p_content[j.res])),pcg_of(j.sprite)):0xffffffffu);}
   S.jobs[off++]=0;
   scenery_restart_longs+=off-restart_off;
- }else{S.restart_job=S.start_job;scenery_restart_longs+=line_off-first_off;}
+ }else{S.restart_job=S.start_job;o_restart=o_start;scenery_restart_longs+=line_off-first_off;}
  (void)content_id;
+ // kept for the next frame (r031)
+ o_longs[0]=scenery_start_longs-o_longs[0];o_longs[1]=scenery_restart_longs-o_longs[1];o_longs[2]=scenery_line_longs-o_longs[2];
+ o_head[0]=S.kept;o_head[1]=S.dropped;o_head[2]=S.reused;o_head[3]=S.line_longs_max;o_head[4]=S.shared;o_head[5]=S.car_dropped;
+ for(unsigned i=0;i<S.count;i++)o_kept[i]=S.sprite[i].kept;
+ for(unsigned i=0;i<car_sprites;i++){o_car2[i]=car.registers[i][2];o_car3[i]=car.registers[i][3];}
+ last_S=&S;last_used=off;last_sig=sig;last_ok=key_ok;
 }
 #if defined(OR_X68K)&&defined(CBX68_TRACE)
 // per frame: scenery, capture, tiles (50us units), sprites, game sprite entries, dropped -> FRAMES.BIN
@@ -1761,6 +1802,7 @@ void visuals_print(){
 #endif
  report_printf("R026 PHASES us capture=%lu colours=%lu tiles=%lu rest=%lu\n",(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_colour*50UL),(unsigned long)(scenery_fine_tiles*50UL),(unsigned long)((scenery_fine_total-scenery_fine_capture-scenery_fine_colour-scenery_fine_tiles)*50UL));
  report_printf("R026 DIAG entries=%lu off=%lu hidden=%lu priority=%lu car=%lu passed=%lu frames_rows=%lu count=%u\n",(unsigned long)scenery_diag[0],(unsigned long)scenery_diag[1],(unsigned long)scenery_diag[2],(unsigned long)scenery_diag[3],(unsigned long)scenery_diag[4],(unsigned long)scenery_diag[5],(unsigned long)scenery_diag[6],(unsigned)osprites.sprite_count);
+ report_printf("R031 PACKET reuses=%lu\n",(unsigned long)scenery_packet_reuses);
  report_printf("R026 JOBS longs/frame start=%lu restart=%lu lines=%lu\n",(unsigned long)(scenery_frames?scenery_start_longs/scenery_frames:0),(unsigned long)(scenery_frames?scenery_restart_longs/scenery_frames:0),(unsigned long)(scenery_frames?scenery_line_longs/scenery_frames:0));
  report_printf("R026 SCENERY frames=%lu sprites avg=%lu max=%u dropped=%lu car_dropped=%lu shared=%lu reused=%lu bank_drops=%lu blocks_max=%u line_longs_max=%u overflow=%lu us total=%lu capture=%lu max=%lu\n",(unsigned long)scenery_frames,(unsigned long)(scenery_frames?scenery_count_total/scenery_frames:0),scenery_peak,(unsigned long)scenery_dropped_total,(unsigned long)scenery_car_dropped,(unsigned long)scenery_shared_total,(unsigned long)scenery_reused_total,(unsigned long)scenery_bank_drops,scenery_block_peak,scenery_line_peak,(unsigned long)scenery_overflow,(unsigned long)(scenery_fine_total*50UL),(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_max*50UL));
 #ifndef OR_X68K
