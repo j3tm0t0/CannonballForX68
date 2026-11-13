@@ -113,6 +113,15 @@ static inline unsigned adpcm_encode(int sample){
  ad_index+=AD_ADJ[nib&7];if(ad_index<0)ad_index=0;else if(ad_index>48)ad_index=48;
  return nib;
 }
+// what the chip's decoder does with one nibble (the coder above keeps the same state)
+static inline void adpcm_follow(unsigned nib){
+ const int step=AD_STEP[ad_index];int delta=step>>3;
+ if(nib&4)delta+=step;if(nib&2)delta+=step>>1;if(nib&1)delta+=step>>2;
+ ad_value+=(nib&8)?-delta:delta;
+ if(ad_value>2047)ad_value=2047;else if(ad_value<-2048)ad_value=-2048;
+ ad_index+=AD_ADJ[nib&7];if(ad_index<0)ad_index=0;else if(ad_index>48)ad_index=48;
+}
+static uint32_t pcm_written=0,pcm_played=0;static unsigned pcm_last_at=0;   // bytes coded / bytes the DMA has read
 static int32_t pcm_mix[PCM_MAX_FILL*2];
 // n samples of the 16 channels into pcm_mix (the loop of SegaPCM::stream_update, two chip samples a step)
 static void pcm_mix_channels(uint8_t*ram,const uint8_t*rom,uint32_t rgnmask,uint8_t*low,unsigned n){
@@ -136,7 +145,7 @@ static void pcm_start(){
  ad_value=0;ad_index=0;
  for(unsigned k=0;k<PCM_RING;k++){unsigned lo=adpcm_encode(0),hi=adpcm_encode(0);pcm_ring[k]=uint8_t(lo|(hi<<4));}
  for(unsigned b=0;b<PCM_BLOCKS;b++){pcm_links[b].addr=pcm_ring+b*PCM_BLOCK_BYTES;pcm_links[b].len=PCM_BLOCK_BYTES;pcm_links[b].next=&pcm_links[(b+1)%PCM_BLOCKS];}
- pcm_write=PCM_LEAD;
+ pcm_write=PCM_LEAD;pcm_written=PCM_LEAD;pcm_played=0;pcm_last_at=0;
  // IOCS _ADPCMLOT: d1 = sampling 15.6 kHz (4) << 8 | output left and right (3), a1 = link array
  {register long d0 __asm__("d0")=0x64;register long d1 __asm__("d1")=0x0403;register void*a1 __asm__("a1")=pcm_links;
   __asm__ volatile("trap #15":"+d"(d0),"+d"(d1),"+a"(a1)::"memory");}
@@ -155,10 +164,19 @@ static void pcm_fill(){
  const uint32_t mar=*(volatile uint32_t*)0xe840ccUL;                    // DMAC channel 3 memory address
  const uint32_t at=mar-uint32_t(uintptr_t(pcm_ring));
  if(at>=PCM_RING)return;                                                  // read while the DMA moved to the next block
- unsigned lead=(pcm_write+PCM_RING-unsigned(at))%PCM_RING;
- if(lead>PCM_RING-64){pcm_write=(unsigned(at)+64)%PCM_RING;lead=64;++audio_pcm_resyncs;}   // the DMA has caught up
+ // bytes the DMA has read since the last look (it moves 141 a blank; a look later than a whole
+ // ring, 262 ms, would be miscounted)
+ pcm_played+=(unsigned(at)+PCM_RING-pcm_last_at)%PCM_RING;pcm_last_at=unsigned(at);
+ int32_t lead=int32_t(pcm_written-pcm_played);
+ if(lead<16){
+  // The DMA has reached (or passed) the last coded byte and is playing old bytes of the ring.
+  // The chip decodes them, so the coder's state is taken through the same bytes, up to where
+  // coding starts again 64 bytes ahead of the DMA.
+  uint32_t stale=uint32_t(64-lead);if(stale>2*PCM_RING)stale=2*PCM_RING;
+  for(uint32_t k=0;k<stale;k++){const unsigned v=pcm_ring[pcm_write];adpcm_follow(v&15);adpcm_follow(v>>4);pcm_write=(pcm_write+1)%PCM_RING;}
+  pcm_write=(unsigned(at)+64)%PCM_RING;pcm_written=pcm_played+64;lead=64;++audio_pcm_resyncs;}
  if(lead>=PCM_LEAD)return;
- unsigned bytes=PCM_LEAD-lead;if(bytes>PCM_MAX_FILL)bytes=PCM_MAX_FILL;
+ unsigned bytes=unsigned(PCM_LEAD-lead);if(bytes>PCM_MAX_FILL)bytes=PCM_MAX_FILL;
  pcm_mix_channels(pcm_regs,pcm_rom,pcm_mask,pcm_low,bytes*2);
  const int32_t*m=pcm_mix;
  for(unsigned k=0;k<bytes;k++){
@@ -166,7 +184,7 @@ static void pcm_fill(){
   if(a>2047)a=2047;else if(a<-2048)a=-2048;if(b>2047)b=2047;else if(b<-2048)b=-2048;
   const unsigned lo=adpcm_encode(a),hi=adpcm_encode(b);
   pcm_ring[pcm_write]=uint8_t(lo|(hi<<4));pcm_write=(pcm_write+1)%PCM_RING;}
- audio_pcm_bytes+=bytes;
+ audio_pcm_bytes+=bytes;pcm_written+=bytes;
 }
 // ---- base class (no sample buffer on the X68000) ----
 SoundChip::SoundChip(){volume=1.0f;initalized=false;buffer=0;buffer_size=0;frame_size=0;}
