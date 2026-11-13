@@ -361,6 +361,9 @@ int main(int argc,char**argv) {
             visuals_build(road_frame,display_palette);visuals_handoff(road_frame);
             road_stream(road_frame);
             visuals_stream(road_frame);
+            // PC check of the rows the raster interrupt steps over (the X68000 calls road_rows_changed below)
+            road_rows_changed(road_frame);
+            if(const unsigned bad=road_rows_check(road_frame)){fprintf(stderr,"ROAD ROWS FAIL frame=%d row=%u\n",frame,bad-1);std::exit(18);}
 #endif
 #ifdef OR_X68K
             native_phase_record(1,phase_start);phase_start=native_clock();
