@@ -960,7 +960,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   }
   if(learn)dirty_rows|=c_unlearned;   // a learning frame also takes the rows that still need it
   // not worth it when most of the screen is touched
-  if(__builtin_popcount(dirty_rows)>9)++scenery_full_why[2];else want_carry=true;
+  if(__builtin_popcount(dirty_rows)>12)++scenery_full_why[2];else want_carry=true;
  }
  // Plan: the banks of this frame's entries, with the colours each was seen to use in earlier
  // frames (all 14 if never seen), packed by colour like r026 (largest first). Colours met that
