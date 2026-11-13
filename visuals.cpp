@@ -954,6 +954,9 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // tile rows of the kept frame whose colours have not been through a learning pass yet (r031b:
  // a learning frame converts just those rows again; 0 = the kept frame can be taken as it is)
  static uint32_t c_unlearned=0x3fff;
+ // r031b: the next changed frame must be a full pass (a partial one placed or dropped a colour
+ // outside the plan, or ran out of sprites: a full pass could do better)
+ static bool c_force_full=false;unsigned lookup_changes=0;
  // the kept frame (r030), and for r031b where each tile row's sprites are in it and what it dropped
  static uint16_t c_count,c_blocks,c_dropped,c_dropped_banks;static uint16_t c_palette[13][16];
  static ScenerySprite c_sprite[SCENERY_MAX];static uint32_t c_pcg[SCENERY_MAX][32],c_hash[SCENERY_MAX];
@@ -966,7 +969,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // sprites touch, in the kept frame or now, are drawn and converted again. The sprites of the
  // other rows are taken from the kept frame, in the same order as a full pass gives them.
  uint32_t dirty_rows=0;bool partial=false;
- if(SCENERY_DIRTY_ROWS&&key_ok&&!reuse&&reuse_valid){
+ if(SCENERY_DIRTY_ROWS&&key_ok&&!reuse&&reuse_valid&&!c_force_full&&!c_dropped){
   unsigned hdr=2;for(unsigned b=0;b<S.blocks;b++)hdr+=1+bcount[b];
   const bool plan_same=hdr<=key_len&&hdr<=reuse_len&&!memcmp(reuse_new,reuse_key,hdr*2)&&(key_len-hdr)%23==0&&(reuse_len-hdr)%23==0;
   if(!plan_same)++scenery_full_why[1];   // another palette plan
@@ -1069,8 +1072,8 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   if(!q&&b<0){for(unsigned k=0;k<S.blocks&&!q;k++)for(unsigned n=1;n<=bcount[k];n++)if(S.palette[k][n]==col){q=((k+1)<<4)|n;break;}}
   if(!q&&b<0){if(S.blocks<block_limit){b=S.blocks++;bcount[b]=0;}
    else{unsigned room=0;for(unsigned k=0;k<S.blocks;k++)if(15-bcount[k]>room){room=15-bcount[k];b=int(k);}}}
-  if(!q&&b>=0){unsigned n=++bcount[b];S.palette[b][n]=col;q=((b+1)<<4)|n;bank_block[bank]=int8_t(b);}
-  if(!q){scenery_map[idx]=255;++S.dropped_banks;}else scenery_map[idx]=uint8_t(q);
+  if(!q&&b>=0){unsigned n=++bcount[b];S.palette[b][n]=col;q=((b+1)<<4)|n;bank_block[bank]=int8_t(b);++lookup_changes;}
+  if(!q){scenery_map[idx]=255;++S.dropped_banks;++lookup_changes;}else scenery_map[idx]=uint8_t(q);
   scenery_used[nused++]=uint16_t(idx);
   return q;};
  static uint32_t sprite_hash[SCENERY_MAX];
@@ -1229,7 +1232,8 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
    memcpy(c_sprite,S.sprite,S.count*sizeof c_sprite[0]);memcpy(c_pcg,S.pcg,S.count*sizeof c_pcg[0]);memcpy(c_hash,sprite_hash,S.count*4);
    memcpy(c_row_start,row_start,sizeof c_row_start);memcpy(c_row_dropped,row_dropped,sizeof c_row_dropped);for(unsigned b=0;b<13;b++)c_bcount[b]=uint8_t(bcount[b]);
    memcpy(reuse_key,reuse_new,key_len*2);reuse_len=key_len;reuse_valid=true;
-   c_unlearned=learn?0:partial?(c_unlearned|dirty_rows):0x3fff;}
+   c_unlearned=learn?0:partial?(c_unlearned|dirty_rows):0x3fff;
+   c_force_full=partial&&(lookup_changes||S.dropped);}
   else reuse_valid=false;
   if(!reuse)++packet_gen;}   // the sprites of this frame are not the kept ones any more
 #ifdef OR_X68K
