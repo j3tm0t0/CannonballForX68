@@ -895,14 +895,76 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  const unsigned car_sprites=car_hw?car.count:0,car_patterns=car_hw?car.patterns:0,car_blocks=car_hw?car.palettes:0;
  S.first_block=3+car_blocks;scenery_palette=pal;
  const unsigned block_limit=car_blocks<13?13-car_blocks:0;
+ static uint16_t bank_seen_mask[512];
+ // r030: a frame whose roadside sprites are the same as in the last computed frame (e.g.
+ // standing at the start) takes that frame's tiles instead of capturing and converting again.
+ // The key is what the picture is made from: the car's palette block count, and per sprite its
+ // 7 words, its 16 colours and the colours its bank has been seen to use (the plan's input).
+ const bool learn=(scenery_frames&7)==0;
+ enum {KEY_ENTRY=24};
+ static uint16_t reuse_key[256*KEY_ENTRY+8],reuse_new[256*KEY_ENTRY+8];static unsigned reuse_len=0;static bool reuse_valid=false;
+ unsigned key_len=0;bool key_ok=sprites_on&&scenery_enabled;
+ if(key_ok){
+  reuse_new[key_len++]=uint16_t(car_blocks);
+  for(unsigned i=0;i<osprites.sprite_count&&key_ok;i++){const osprite&e=osprites.sprite_entries[i];const uint16_t*r=e.data;
+   if((r[0]&0xd000)||((r[3]>>12)&3)!=3||scenery_is_car(e.scratch))continue;
+   if(key_len+KEY_ENTRY>sizeof reuse_new/2){key_ok=false;break;}
+   for(unsigned k=0;k<7;k++)reuse_new[key_len++]=r[k];
+   const unsigned base=COLOR_BASE_SCENERY+((r[5]&127)<<4);for(unsigned n=0;n<16;n++)reuse_new[key_len++]=pal[base|n];
+   reuse_new[key_len++]=bank_seen_mask[base>>4];}
+ }
+ // tile rows of the kept frame whose colours have not been through a learning pass yet (r031b:
+ // a learning frame converts just those rows again; 0 = the kept frame can be taken as it is)
+ static uint32_t c_unlearned=0x3fff;
+ // r031b: the next changed frame must be a full pass (a partial one placed or dropped a colour
+ // outside the plan, or ran out of sprites: a full pass could do better)
+ static bool c_force_full=false;unsigned lookup_changes=0;
+ // the kept frame (r030), and for r031b where each tile row's sprites are in it and what it dropped
+ static uint16_t c_count,c_blocks,c_dropped,c_dropped_banks;static uint16_t c_palette[13][16];
+ static ScenerySprite c_sprite[SCENERY_MAX];static uint32_t c_pcg[SCENERY_MAX][32],c_hash[SCENERY_MAX];
+ static uint16_t c_row_start[15],c_row_dropped[14];static uint8_t c_bcount[13];
+ static uint16_t row_start[15],row_dropped[14];
+ // r031d: the palette block each bank had in the kept frame, and that frame's car block count
+ static uint16_t c_bank_id[512];static int8_t c_bank_blk[512];static unsigned c_bank_n=0,c_car_blocks=999;
+ static uint32_t packet_gen=0;   // changes whenever the roadside sprites of a frame differ from the frame before
+ const bool reuse=key_ok&&(!learn||!c_unlearned)&&reuse_valid&&key_len==reuse_len&&!memcmp(reuse_new,reuse_key,key_len*2);
+ // r031b: a frame that differs from the kept one in a few sprites only (e.g. the starter waving
+ // at the start): only the tile rows those sprites touch, in the kept frame or now, are drawn
+ // and converted again. The sprites of the other rows are taken from the kept frame, in the
+ // same order as a full pass gives them. For that the kept frame's palette must stay as it is:
+ // the plan below is then carried over from it (r031d) instead of made anew.
+ uint32_t dirty_rows=0;bool partial=false,want_carry=false;
+ if(SCENERY_DIRTY_ROWS&&key_ok&&!reuse&&reuse_valid&&!c_force_full&&!c_dropped&&c_car_blocks==car_blocks&&reuse_new[0]==reuse_key[0]){
+  auto mark=[&](const uint16_t*r){const int top=(r[0]&511)-256,rws=(r[5]>>8)+1,bottom=top+((r[4]&0x8000)?rws-1:1-rws);
+   const int lo=std::min(top,bottom),hi=std::max(top,bottom);
+   if(hi<0||lo>223)return;
+   for(int ty=std::max(0,lo)>>4;ty<=std::min(223,hi)>>4;ty++)dirty_rows|=1u<<ty;};
+  // (the bank's seen colours, the last word of an entry, change nothing in the picture)
+  const unsigned n_new=(key_len-1)/KEY_ENTRY,n_old=(reuse_len-1)/KEY_ENTRY;
+  const uint16_t*const e_new=reuse_new+1,*const e_old=reuse_key+1;
+  if(n_new==n_old){
+   for(unsigned i=0;i<n_new;i++)if(memcmp(e_new+i*KEY_ENTRY,e_old+i*KEY_ENTRY,46)){mark(e_new+i*KEY_ENTRY);mark(e_old+i*KEY_ENTRY);}
+  }else{
+   // sprites came or went: the same ones at the front and at the back of the two lists are
+   // unchanged (and in the same order); everything between counts as changed
+   ++scenery_full_why[0];
+   unsigned p=0;const unsigned least=std::min(n_new,n_old);
+   while(p<least&&!memcmp(e_new+p*KEY_ENTRY,e_old+p*KEY_ENTRY,46))++p;
+   unsigned q=0;while(q<least-p&&!memcmp(e_new+(n_new-1-q)*KEY_ENTRY,e_old+(n_old-1-q)*KEY_ENTRY,46))++q;
+   for(unsigned i=p;i<n_new-q;i++)mark(e_new+i*KEY_ENTRY);
+   for(unsigned i=p;i<n_old-q;i++)mark(e_old+i*KEY_ENTRY);
+  }
+  if(learn)dirty_rows|=c_unlearned;   // a learning frame also takes the rows that still need it
+  // not worth it when most of the screen is touched
+  if(__builtin_popcount(dirty_rows)>9)++scenery_full_why[2];else want_carry=true;
+ }
  // Plan: the banks of this frame's entries, with the colours each was seen to use in earlier
  // frames (all 14 if never seen), packed by colour like r026 (largest first). Colours met that
  // were not planned are placed when met.
  unsigned nused=0,bcount[13]={0};
  static int8_t bank_block[512];static uint16_t bank_list[512];static uint8_t scenery_met[8192];unsigned nbank=0;
  if(!scenery_bank_init){memset(bank_block,-1,sizeof bank_block);scenery_bank_init=true;}
- static uint16_t bank_seen_mask[512];
- {static uint16_t plan_bank[128];unsigned np=0;
+ if(!reuse){static uint16_t plan_bank[128];unsigned np=0;   // (a frame that takes the kept tiles needs no plan)
   for(unsigned i=0;i<osprites.sprite_count;i++){const osprite&e=osprites.sprite_entries[i];const uint16_t*r=e.data;
    if(!sprites_on||!scenery_enabled||(r[0]&0xd000)||((r[3]>>12)&3)!=3||scenery_is_car(e.scratch))continue;
    unsigned bank=(COLOR_BASE_SCENERY>>4)+(r[5]&127);if(bank_block[bank]!=-1)continue;
@@ -911,6 +973,39 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   for(unsigned j=0;j<np;j++){unsigned bank=plan_bank[j],mask=bank_seen_mask[bank]?bank_seen_mask[bank]:0x7ffe;pn[j]=0;
    for(unsigned n=1;n<15;n++)if(mask&(1u<<n)){unsigned idx=bank*16+n;pidx[j][pn[j]]=uint16_t(idx);pcol[j][pn[j]]=pal[idx];pn[j]++;}
    order[j]=uint16_t(j);}
+  // r031d: carried plan. The kept frame's palette blocks stay as they are (so its tiles stay
+  // right); a bank keeps the block it had, colours it lacks are added to that block, a bank the
+  // kept frame did not have goes to the block that needs the fewest new colours. When something
+  // does not fit, the plan is made anew below and the whole picture is converted.
+  bool carried=false;
+  if(want_carry){
+   carried=true;
+   S.blocks=c_blocks;for(unsigned b=0;b<13;b++)bcount[b]=c_bcount[b];memcpy(S.palette,c_palette,sizeof c_palette);
+   static int8_t prev_blk[512];static bool prev_init=false;if(!prev_init){memset(prev_blk,-1,sizeof prev_blk);prev_init=true;}
+   for(unsigned k=0;k<c_bank_n;k++)prev_blk[c_bank_id[k]]=c_bank_blk[k];
+   for(unsigned j=0;j<np&&carried;j++){const unsigned bank=plan_bank[j];int blk=prev_blk[bank];
+    if(blk<0||unsigned(blk)>=S.blocks){
+     int best=-1;unsigned best_new=99;
+     for(unsigned b=0;b<S.blocks;b++){unsigned add=0;
+      for(unsigned c=0;c<pn[j];c++){bool dup=false;for(unsigned c2=0;c2<c;c2++)if(pcol[j][c2]==pcol[j][c]){dup=true;break;}
+       if(dup)continue;bool have=false;for(unsigned n=1;n<=bcount[b];n++)if(S.palette[b][n]==pcol[j][c]){have=true;break;}
+       if(!have)++add;}
+      if(bcount[b]+add<=15&&add<best_new){best=int(b);best_new=add;}}
+     if(best<0&&S.blocks<block_limit){best=S.blocks++;bcount[best]=0;}
+     if(best<0){carried=false;break;}
+     blk=best;}
+    for(unsigned c=0;c<pn[j];c++){unsigned n=1;for(;n<=bcount[blk];n++)if(S.palette[blk][n]==pcol[j][c])break;
+     if(n>bcount[blk]){if(bcount[blk]>=15){carried=false;break;}n=++bcount[blk];S.palette[blk][n]=pcol[j][c];}
+     scenery_map[pidx[j][c]]=uint8_t(((blk+1)<<4)|n);scenery_used[nused++]=pidx[j][c];}
+    if(carried)bank_block[bank]=int8_t(blk);}
+   for(unsigned k=0;k<c_bank_n;k++)prev_blk[c_bank_id[k]]=-1;
+   if(!carried){   // undo, then the plan from nothing
+    for(unsigned k=0;k<nused;k++)scenery_map[scenery_used[k]]=0;nused=0;
+    for(unsigned j=0;j<np;j++)bank_block[plan_bank[j]]=-2;
+    S.blocks=0;for(unsigned b=0;b<13;b++)bcount[b]=0;memset(S.palette,0,sizeof S.palette);++scenery_full_why[1];}
+  }
+  partial=carried;
+  if(!carried){
   std::sort(order,order+np,[](uint16_t a,uint16_t b){return pn[a]>pn[b]||(pn[a]==pn[b]&&a<b);});
   // r028: which blocks already hold a colour, as a small hash table colour -> block bits (same
   // choices as the r026e search over every block and colour, without the nested compares)
@@ -932,70 +1027,6 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
     scenery_map[pidx[j][c]]=uint8_t(((best+1)<<4)|n);scenery_used[nused++]=pidx[j][c];}
   }
   for(unsigned k=0;k<ch_n;k++)ch_used[ch_list[k]]=0;
- }
- // r030: a frame whose roadside sprites are the same as in the last computed frame (same
- // entries, palette plan and colours; e.g. standing at the start) takes that frame's tiles
- // instead of capturing and converting again (the same result).
- const bool learn=(scenery_frames&7)==0;
- static uint16_t reuse_key[256*23+256],reuse_new[256*23+256];static unsigned reuse_len=0;static bool reuse_valid=false;
- unsigned key_len=0;bool key_ok=sprites_on&&scenery_enabled;
- if(key_ok){
-  reuse_new[key_len++]=uint16_t(car_blocks);reuse_new[key_len++]=S.blocks;
-  for(unsigned b=0;b<S.blocks;b++){reuse_new[key_len++]=uint16_t(bcount[b]);for(unsigned n=1;n<=bcount[b];n++)reuse_new[key_len++]=S.palette[b][n];}
-  for(unsigned i=0;i<osprites.sprite_count&&key_ok;i++){const osprite&e=osprites.sprite_entries[i];const uint16_t*r=e.data;
-   if((r[0]&0xd000)||((r[3]>>12)&3)!=3||scenery_is_car(e.scratch))continue;
-   if(key_len+23>sizeof reuse_new/2){key_ok=false;break;}
-   for(unsigned k=0;k<7;k++)reuse_new[key_len++]=r[k];
-   const unsigned base=COLOR_BASE_SCENERY+((r[5]&127)<<4);for(unsigned n=0;n<16;n++)reuse_new[key_len++]=pal[base|n];}
- }
- // A colour-learning frame also takes the kept tiles when the kept frame was itself computed on
- // a learning frame: the same picture marks the same colours, and those bits are already set
- // (bank_seen_mask only gains bits), so the pass would change nothing.
- // tile rows of the kept frame whose colours have not been through a learning pass yet (r031b:
- // a learning frame converts just those rows again; 0 = the kept frame can be taken as it is)
- static uint32_t c_unlearned=0x3fff;
- // r031b: the next changed frame must be a full pass (a partial one placed or dropped a colour
- // outside the plan, or ran out of sprites: a full pass could do better)
- static bool c_force_full=false;unsigned lookup_changes=0;
- // the kept frame (r030), and for r031b where each tile row's sprites are in it and what it dropped
- static uint16_t c_count,c_blocks,c_dropped,c_dropped_banks;static uint16_t c_palette[13][16];
- static ScenerySprite c_sprite[SCENERY_MAX];static uint32_t c_pcg[SCENERY_MAX][32],c_hash[SCENERY_MAX];
- static uint16_t c_row_start[15],c_row_dropped[14];static uint8_t c_bcount[13];
- static uint16_t row_start[15],row_dropped[14];
- static uint32_t packet_gen=0;   // changes whenever the roadside sprites of a frame differ from the frame before
- const bool reuse=key_ok&&(!learn||!c_unlearned)&&reuse_valid&&key_len==reuse_len&&!memcmp(reuse_new,reuse_key,key_len*2);
- // r031b: a frame that differs from the kept one in a few sprites only (the same palette plan,
- // the same number of sprites; e.g. the starter waving at the start): only the tile rows those
- // sprites touch, in the kept frame or now, are drawn and converted again. The sprites of the
- // other rows are taken from the kept frame, in the same order as a full pass gives them.
- uint32_t dirty_rows=0;bool partial=false;
- if(SCENERY_DIRTY_ROWS&&key_ok&&!reuse&&reuse_valid&&!c_force_full&&!c_dropped){
-  unsigned hdr=2;for(unsigned b=0;b<S.blocks;b++)hdr+=1+bcount[b];
-  const bool plan_same=hdr<=key_len&&hdr<=reuse_len&&!memcmp(reuse_new,reuse_key,hdr*2)&&(key_len-hdr)%23==0&&(reuse_len-hdr)%23==0;
-  if(!plan_same)++scenery_full_why[1];   // another palette plan
-  if(plan_same){
-   partial=true;
-   auto mark=[&](const uint16_t*r){const int top=(r[0]&511)-256,rws=(r[5]>>8)+1,bottom=top+((r[4]&0x8000)?rws-1:1-rws);
-    const int lo=std::min(top,bottom),hi=std::max(top,bottom);
-    if(hi<0||lo>223)return;
-    for(int ty=std::max(0,lo)>>4;ty<=std::min(223,hi)>>4;ty++)dirty_rows|=1u<<ty;};
-   const unsigned n_new=(key_len-hdr)/23,n_old=(reuse_len-hdr)/23;
-   const uint16_t*const e_new=reuse_new+hdr,*const e_old=reuse_key+hdr;
-   if(n_new==n_old){
-    for(unsigned i=0;i<n_new;i++)if(memcmp(e_new+i*23,e_old+i*23,46)){mark(e_new+i*23);mark(e_old+i*23);}
-   }else{
-    // sprites came or went: the same ones at the front and at the back of the two lists are
-    // unchanged (and in the same order); everything between counts as changed
-    ++scenery_full_why[0];
-    unsigned p=0;const unsigned least=std::min(n_new,n_old);
-    while(p<least&&!memcmp(e_new+p*23,e_old+p*23,46))++p;
-    unsigned q=0;while(q<least-p&&!memcmp(e_new+(n_new-1-q)*23,e_old+(n_old-1-q)*23,46))++q;
-    for(unsigned i=p;i<n_new-q;i++)mark(e_new+i*23);
-    for(unsigned i=p;i<n_old-q;i++)mark(e_old+i*23);
-   }
-   if(learn)dirty_rows|=c_unlearned;   // a learning frame also takes the rows that still need it
-   // not worth it when most of the screen is touched
-   if(__builtin_popcount(dirty_rows)>9){partial=false;++scenery_full_why[2];}   // too many rows
   }
  }
  // 1. capture
@@ -1091,8 +1122,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
 #endif
  for(unsigned t=0;t<15;t++)row_start[t]=0;memset(row_dropped,0,sizeof row_dropped);
  if(partial){
-  // the palette as the kept frame left it (its plan is this frame's plan; colours placed later stay)
-  S.blocks=c_blocks;memcpy(S.palette,c_palette,sizeof c_palette);for(unsigned b=0;b<13;b++)bcount[b]=c_bcount[b];
+  // (the palette is the kept frame's with this frame's additions: the carried plan)
   S.dropped_banks=c_dropped_banks;
   // sprites drawn for a dirty row also reach into other rows: those pixels are not wanted
   for(int ty=0;ty<14;ty++)if(tile_live[ty]&&!(dirty_rows&(1u<<ty))){memset(scenery_pixels+ty*16*320,0,16*320*2);tile_live[ty]=0;}
@@ -1222,6 +1252,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   ++asm_check[7];if(bad)++asm_check[2];memset(chk_met,0,sizeof chk_met);}
 #endif
  if(learn)memset(met_q,0,sizeof met_q);
+ if(!reuse&&key_ok){c_bank_n=nbank;for(unsigned k=0;k<nbank;k++){c_bank_id[k]=bank_list[k];c_bank_blk[k]=bank_block[bank_list[k]];}c_car_blocks=car_blocks;}
  for(unsigned k=0;k<nbank;k++)bank_block[bank_list[k]]=-1;
  for(unsigned b=0;b<S.blocks;b++)for(unsigned n=bcount[b]+1;n<16;n++)S.palette[b][n]=0;
  // r030: keep this frame's tiles for a frame with the same sprites, or take the kept ones
@@ -1873,7 +1904,7 @@ void visuals_print(){
 #endif
  report_printf("R026 PHASES us capture=%lu colours=%lu tiles=%lu rest=%lu\n",(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_colour*50UL),(unsigned long)(scenery_fine_tiles*50UL),(unsigned long)((scenery_fine_total-scenery_fine_capture-scenery_fine_colour-scenery_fine_tiles)*50UL));
  report_printf("R026 DIAG entries=%lu off=%lu hidden=%lu priority=%lu car=%lu passed=%lu frames_rows=%lu count=%u\n",(unsigned long)scenery_diag[0],(unsigned long)scenery_diag[1],(unsigned long)scenery_diag[2],(unsigned long)scenery_diag[3],(unsigned long)scenery_diag[4],(unsigned long)scenery_diag[5],(unsigned long)scenery_diag[6],(unsigned)osprites.sprite_count);
- report_printf("R031 PACKET reuses=%lu partial_frames=%lu (sprites came or went=%lu) full: plan=%lu rows=%lu\n",(unsigned long)scenery_packet_reuses,(unsigned long)scenery_partial_frames,(unsigned long)scenery_full_why[0],(unsigned long)scenery_full_why[1],(unsigned long)scenery_full_why[2]);
+ report_printf("R031 PACKET reuses=%lu partial=%lu came_or_went=%lu no_carry=%lu many_rows=%lu\n",(unsigned long)scenery_packet_reuses,(unsigned long)scenery_partial_frames,(unsigned long)scenery_full_why[0],(unsigned long)scenery_full_why[1],(unsigned long)scenery_full_why[2]);
  report_printf("R026 JOBS longs/frame start=%lu restart=%lu lines=%lu\n",(unsigned long)(scenery_frames?scenery_start_longs/scenery_frames:0),(unsigned long)(scenery_frames?scenery_restart_longs/scenery_frames:0),(unsigned long)(scenery_frames?scenery_line_longs/scenery_frames:0));
  report_printf("R026 SCENERY frames=%lu sprites avg=%lu max=%u dropped=%lu car_dropped=%lu shared=%lu reused=%lu bank_drops=%lu blocks_max=%u line_longs_max=%u overflow=%lu us total=%lu capture=%lu max=%lu\n",(unsigned long)scenery_frames,(unsigned long)(scenery_frames?scenery_count_total/scenery_frames:0),scenery_peak,(unsigned long)scenery_dropped_total,(unsigned long)scenery_car_dropped,(unsigned long)scenery_shared_total,(unsigned long)scenery_reused_total,(unsigned long)scenery_bank_drops,scenery_block_peak,scenery_line_peak,(unsigned long)scenery_overflow,(unsigned long)(scenery_fine_total*50UL),(unsigned long)(scenery_fine_capture*50UL),(unsigned long)(scenery_fine_max*50UL));
 #ifndef OR_X68K
