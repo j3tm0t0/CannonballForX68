@@ -898,7 +898,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  }
  // r030: a frame whose roadside sprites are the same as in the last computed frame (same
  // entries, palette plan and colours; e.g. standing at the start) takes that frame's tiles
- // instead of capturing and converting again (the same result). Not on colour-learning frames.
+ // instead of capturing and converting again (the same result).
  const bool learn=(scenery_frames&7)==0;
  static uint16_t reuse_key[256*23+256],reuse_new[256*23+256];static unsigned reuse_len=0;static bool reuse_valid=false;
  unsigned key_len=0;bool key_ok=sprites_on&&scenery_enabled;
@@ -911,7 +911,11 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
    for(unsigned k=0;k<7;k++)reuse_new[key_len++]=r[k];
    const unsigned base=COLOR_BASE_SCENERY+((r[5]&127)<<4);for(unsigned n=0;n<16;n++)reuse_new[key_len++]=pal[base|n];}
  }
- const bool reuse=key_ok&&!learn&&reuse_valid&&key_len==reuse_len&&!memcmp(reuse_new,reuse_key,key_len*2);
+ // A colour-learning frame also takes the kept tiles when the kept frame was itself computed on
+ // a learning frame: the same picture marks the same colours, and those bits are already set
+ // (bank_seen_mask only gains bits), so the pass would change nothing.
+ static bool reuse_learned=false;
+ const bool reuse=key_ok&&(!learn||reuse_learned)&&reuse_valid&&key_len==reuse_len&&!memcmp(reuse_new,reuse_key,key_len*2);
  // 1. capture
 #ifdef OR_X68K
  uint32_t tc=platform_fine_clock();
@@ -1124,7 +1128,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
    memcpy(S.sprite,c_sprite,S.count*sizeof c_sprite[0]);memcpy(S.pcg,c_pcg,S.count*sizeof c_pcg[0]);memcpy(sprite_hash,c_hash,S.count*4);++scenery_reuse_frames;}
   else if(key_ok){c_count=S.count;c_blocks=S.blocks;c_dropped=S.dropped;c_dropped_banks=S.dropped_banks;memcpy(c_palette,S.palette,sizeof c_palette);
    memcpy(c_sprite,S.sprite,S.count*sizeof c_sprite[0]);memcpy(c_pcg,S.pcg,S.count*sizeof c_pcg[0]);memcpy(c_hash,sprite_hash,S.count*4);
-   memcpy(reuse_key,reuse_new,key_len*2);reuse_len=key_len;reuse_valid=true;}
+   memcpy(reuse_key,reuse_new,key_len*2);reuse_len=key_len;reuse_valid=true;reuse_learned=learn;}
   else reuse_valid=false;}
 #ifdef OR_X68K
  uint32_t ts=platform_fine_clock();scenery_fine_tiles+=ts-tp;
