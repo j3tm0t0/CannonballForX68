@@ -470,11 +470,17 @@ void visuals_stream(const RoadFrame&f){
 }
 void visuals_native_init(){near_loaded=far_loaded=0;bg_ring[0].loaded=bg_ring[1].loaded=0;}
 // Keep BG character rows 0..49 and 60 intact; other map rows are never displayed.
-static unsigned car_pattern_slot(unsigned index){
+static unsigned car_pattern_slot_slow(unsigned index){
  unsigned base=(road_atlas.tiles+3)/4,first=128-base;
  if(index<first)return base+index;
  unsigned k=index-first,row=k%13;row=row<10?50+row:61+row-10;
  return 128+(k/13)*64+row;
+}
+// (called for every job: from a table made at the first call, the road atlas is loaded by then)
+static unsigned car_pattern_slot(unsigned index){
+ static uint16_t slot[256];static bool made=false;
+ if(!made){for(unsigned i=0;i<256;i++)slot[i]=uint16_t(car_pattern_slot_slow(i));made=true;}
+ return index<256?slot[index]:car_pattern_slot_slow(index);
 }
 // Reuse the original 16-colour banks; split a tile only where banks overlap.
 // r020: banks met by the last build_car_direct() call, in first-seen order (for the car cache key).
@@ -1483,6 +1489,7 @@ static unsigned hud_colour_distance(uint16_t a,uint16_t b){
  int d=0;for(unsigned sh=1;sh<16;sh+=5){int x=int((a>>sh)&31)-int((b>>sh)&31);d+=x*x;}return unsigned(d);}
 static unsigned hud_slot(unsigned b,unsigned v,const uint16_t*pal){
  for(unsigned s=1;s<=hud_band_n[b];s++)if(hud_band_idx[b][s]==v)return s;
+ // (the caller remembers the last colour and its slot, so runs of one colour do not come here)
  for(unsigned k=0;k<hud_band_an[b];k++)if(hud_band_aidx[b][k]==v)return hud_band_aslot[b][k];
  const uint16_t c=pal[v];
  unsigned s=0;
@@ -1499,9 +1506,14 @@ static void build_hud_body(HudPacket&H,const uint16_t*pal,bool car_on_text){
  const uint8_t*tr=video.tile_layer->text_ram;
  const unsigned bank=video.tile_layer->text_bank();
  static uint8_t changed[28][40];uint32_t rows=0;
- for(unsigned my=0;my<28;my++)for(unsigned cx=0;cx<40;cx++){unsigned i=my*128+(cx+24)*2;uint16_t code=uint16_t((tr[i]<<8)|tr[i+1]);
-  changed[my][cx]=!hud_valid||code!=hud_code[my][cx];hud_code[my][cx]=code;
-  if((code>>15)&1){unsigned t=((code&0x1ff)+bank*0x1000)&0x1fff;if(t)rows|=1u<<my;}}
+ // a text row whose 40 codes are the bytes they were last frame is not looked at cell by cell
+ static uint8_t row_bytes[28][80];const bool rows_known=hud_valid&&bank==hud_bank;
+ for(unsigned my=0;my<28;my++){const uint8_t*const rb=tr+my*128+48;
+  if(rows_known&&!memcmp(rb,row_bytes[my],80)){memset(changed[my],0,40);rows|=hud_rows_mask&(1u<<my);continue;}
+  memcpy(row_bytes[my],rb,80);
+  for(unsigned cx=0;cx<40;cx++){uint16_t code=uint16_t((rb[cx*2]<<8)|rb[cx*2+1]);
+   changed[my][cx]=!hud_valid||code!=hud_code[my][cx];hud_code[my][cx]=code;
+   if((code>>15)&1){unsigned t=((code&0x1ff)+bank*0x1000)&0x1fff;if(t)rows|=1u<<my;}}}
  const bool full=!hud_valid||++hud_age>=300||bank!=hud_bank||rows!=hud_rows_mask;
  hud_bank=bank;hud_rows_mask=rows;
  if(full){hud_age=0;hud_valid=true;}
@@ -1522,10 +1534,13 @@ static void build_hud_body(HudPacket&H,const uint16_t*pal,bool car_on_text){
    for(unsigned k=0;k<nk;k++)hud_slot(b,cnt_idx[k],pal);
   }
  }
+ unsigned last_v=0,last_b=999,last_s=0;   // hud_slot of the last colour (slots do not change in this loop once given)
  for(unsigned my=0;my<28;my++)for(unsigned cx=0;cx<40;cx++){if(!full&&!changed[my][cx])continue;
   uint8_t*pl=H.planes[H.count];memset(pl,0,32);const unsigned b=hud_row_band[my];
   if(b!=255&&hud_cell_pixels(my,cx,bank,px))for(unsigned r=0;r<8;r++){const uint16_t*src=px+r*8;
-   for(unsigned x=0;x<8;x++){unsigned v=src[x];if(!v)continue;unsigned s=hud_slot(b,v,pal);
+   for(unsigned x=0;x<8;x++){unsigned v=src[x];if(!v)continue;
+    if(v!=last_v||b!=last_b){last_s=hud_slot(b,v,pal);last_v=v;last_b=b;}
+    const unsigned s=last_s;
     for(unsigned p=0;p<4;p++)if(s&(1u<<p))pl[p*8+r]|=uint8_t(0x80>>x);}}
   H.pos[H.count++]=uint16_t(my*40+cx);}
  H.full=full;H.bands=uint16_t(hud_bands);
