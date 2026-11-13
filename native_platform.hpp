@@ -22,29 +22,24 @@ extern "C"{extern volatile uint8_t audio_hold;extern volatile uint32_t audio_tic
 #ifdef CBX68_AUDIO_LOG
 extern "C"{extern uint32_t audio_log[];extern volatile uint32_t audio_log_n;}
 #endif
-// MPU caches (main.cpp calls native_cache_on at the start, platform_exit puts the CACR back).
-// MPU type from the IOCS work byte 0x0CBC (3 = 68030, 4 = 68040, 6 = 68060).
-static unsigned native_mpu=0;static uint32_t native_cacr_before=0;static bool native_cacr_set=false;
+// MPU caches (main.cpp calls native_cache_on at the start, platform_exit puts the state back).
+// Asked through IOCS _SYS_STAT (d1=3 reads the state: bit 0 instruction, bit 1 data; d1=4 sets it
+// from d2), which the X68030 ROM and the 68060 accelerator's driver provide. Without them the call
+// fails and nothing is touched: turning the caches on in the CACR by hand would also cache the I/O
+// area when nobody has set the MMU or the transparent translation registers up for it.
+static int native_cache_before=-1;static bool native_cache_set=false,native_cache_was_set=false;
+static long native_sys_stat(long mode,long value){
+ register long d0 __asm__("d0")=0xac;register long d1 __asm__("d1")=mode;register long d2 __asm__("d2")=value;
+ __asm__ volatile("trap #15":"+d"(d0),"+d"(d1),"+d"(d2)::"memory");
+ return d0;
+}
 static void native_cache_on(){
- const int ssp=_iocs_b_super(0);
- native_mpu=*(volatile uint8_t*)0x0cbcUL;
- if(native_mpu>=3){
-  uint32_t c;__asm__ volatile("movec %%cacr,%0":"=d"(c));native_cacr_before=c;
-  uint32_t want=c;
-  if(native_mpu==3){if((c&0x0101)!=0x0101)want=c|0x0101|0x0808;}                       // EI, ED, with both caches cleared
-  else if(native_mpu==4){if((c&0x80008000u)!=0x80008000u)want=c|0x80008000u;}             // EDC, EIC
-  else{if((c&0x80008000u)!=0x80008000u)want=c|0x80008000u|0x20000000u|0x00800000u|0x00400000u;}   // 68060: EDC, EIC, store buffer, branch cache (cleared)
-  if(want!=c){
-   if(native_mpu>=4)__asm__ volatile("cinva %%bc":::"memory");   // nothing valid in them yet
-   __asm__ volatile("movec %0,%%cacr"::"d"(want):"memory");native_cacr_set=true;}
- }
- if(ssp>0)_iocs_b_super(ssp);
+ native_cache_before=int(native_sys_stat(3,0));
+ if(native_cache_before>=0&&(native_cache_before&3)!=3){native_sys_stat(4,3);native_cache_set=native_cache_was_set=true;}
 }
 static void native_cache_restore(){
- if(!native_cacr_set)return;
- uint32_t c=native_cacr_before;
- if(native_mpu>=4)__asm__ volatile("cpusha %%bc":::"memory");   // write back what the data cache holds
- __asm__ volatile("movec %0,%%cacr"::"d"(c):"memory");native_cacr_set=false;
+ if(!native_cache_set)return;
+ native_sys_stat(4,native_cache_before&3);native_cache_set=false;
 }
 static int native_audio_game=1;   // main.cpp: 0 for the display test (no ROMs, no sound program)
 #ifdef CBX68_PROF
@@ -263,6 +258,7 @@ static void platform_exit(){
  report_printf("bg_columns=%lu car_frames=%lu car_tiles=%lu max_tiles=%u max_patterns=%u max_line=%u overflow=%lu\n",(unsigned long)background_columns,(unsigned long)car_frames,(unsigned long)car_tiles_total,car_peak_tiles,car_peak_patterns,car_peak_line,(unsigned long)car_overflows);
  report_printf("car_text_frames=%lu\n",(unsigned long)car_text_frames);
  report_printf("shown_x1000=%lu\n",t?road_shown*100000UL/t:0);
+ report_printf("MPU cache at start=%d%s (-1: no cache control in this system, 3: both on)\n",native_cache_before,native_cache_was_set?", turned on by this program":"");
  report_printf("IOSPEED ns/long ram=%lu pcg=%lu bg=%lu pal=%lu crtc=%lu\n",(unsigned long)io_probe_ns[0],(unsigned long)io_probe_ns[1],(unsigned long)io_probe_ns[2],(unsigned long)io_probe_ns[3],(unsigned long)io_probe_ns[4]);
  report_printf("LINE BUDGET longs=%u (pcg ns/long at start=%lu)\n",visuals_line_budget(),(unsigned long)pcg_long_ns);
  report_printf("vblanks=%lu raster_irqs=%lu vblank_overruns=%lu\n",(unsigned long)road_vblanks,(unsigned long)road_irq_count,(unsigned long)road_vblank_overruns);

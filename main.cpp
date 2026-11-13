@@ -48,9 +48,11 @@ int main(int argc,char**argv) {
 #ifdef OR_X68K
     // The MPU caches: on a 68030 and above the program is many times slower with them off, and they
     // are off when no driver has turned them on (a 68060 accelerator without its driver). They are
-    // turned on here through the CACR, and what was found is put back at the end (platform_exit).
+    // turned on here (IOCS _SYS_STAT), and what was found is put back at the end (platform_exit).
     native_cache_on();
-    printf("MPU 680%u0 cache register: was %08lx%s\n",native_mpu,(unsigned long)native_cacr_before,native_cacr_set?", caches turned on":"");fflush(stdout);
+    if(native_cache_before<0)puts("MPU cache: this system has no cache control (IOCS _SYS_STAT); if this is a 68030 or above, the game is much slower with the caches off.");
+    else printf("MPU cache: was %d%s\n",native_cache_before,native_cache_was_set?", turned on":"");
+    fflush(stdout);
 #endif
     // Cannonball for x68: "CBX68 TEST" = display test without ROMs (PC: 2nd argument = frames)
 #ifdef OR_X68K
