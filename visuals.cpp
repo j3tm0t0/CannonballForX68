@@ -861,6 +861,10 @@ static const bool SCENERY_PACKET_REUSE=CBX68_PACKET_REUSE;static uint32_t scener
 #define CBX68_DIRTY_ROWS 1
 #endif
 static const bool SCENERY_DIRTY_ROWS=CBX68_DIRTY_ROWS;static uint32_t scenery_partial_frames=0,scenery_full_why[3];
+#ifndef CBX68_FULL_FIRST
+#define CBX68_FULL_FIRST 1
+#endif
+static const bool SCENERY_FULL_FIRST=CBX68_FULL_FIRST;
 static const bool SCENERY_DIFF=CBX68_DIFF;   // a pattern rewritten by a line job: only the longs that differ from what it held
 static uint32_t scenery_start_longs=0,scenery_restart_longs=0,scenery_line_longs=0;   // job list sizes, summed over the frames
 #ifndef OR_X68K
@@ -1308,6 +1312,18 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   unsigned car_end[14];for(unsigned r=0;r<14;r++)car_end[r]=start[r];
   for(unsigned i=0;i<car_sprites;i++)if(car_row[i]<14)users[car_end[car_row[i]]++]=uint16_t(SCENERY_MAX+i);
   for(unsigned i=0;i<S.count;i++){const unsigned r=S.sprite[i].row;if(r<14)users[car_end[r]++]=uint16_t(i);}
+  // r031e: within a tile row the fullest tiles come first, so what does not fit any more (the
+  // row's line budget for pattern loads) are the tiles with the fewest pixels. Only rows that
+  // can run short are sorted (more tiles than the 10 lines after the row before can load).
+  if(SCENERY_FULL_FIRST){static uint8_t weight[SCENERY_MAX];
+   for(unsigned r=0;r<14;r++){const unsigned a0=car_end[r]-0,b0=start[r+1];unsigned first=start[r];
+    while(first<b0&&users[first]>=SCENERY_MAX)++first;   // after the car's tiles
+    (void)a0;if(b0-first<12)continue;
+    for(unsigned k=first;k<b0;k++){const uint32_t*p=S.pcg[users[k]];unsigned w=0;for(unsigned q=0;q<32;q++)w+=p[q]!=0;weight[users[k]]=uint8_t(w);}
+    for(unsigned k=first+1;k<b0;k++){const uint16_t u=users[k];const unsigned w=weight[u];unsigned j=k;
+     while(j>first&&weight[users[j-1]]<w){users[j]=users[j-1];--j;}
+     users[j]=u;}}
+  }
  }
  static uint32_t car_pcg32[128][32];
  for(unsigned i=0;i<car_sprites;i++){const uint8_t*b=car.pcg[car.pattern_index[i]];
