@@ -15,6 +15,18 @@
 
 OSoundInt osoundint;
 OSound osound;
+#ifdef OR_X68K
+// Cannonball for x68: the sound code runs from the vertical blank interrupt (audio_x68k.cpp).
+// audio_hold keeps it out while init() runs; the queue is changed with interrupts masked.
+// (Before the display is set up the program is still in user mode and the interrupt is not
+// installed: audio_super is 0 and nothing is masked.)
+extern "C" volatile uint8_t audio_hold,audio_super;
+#define CBX68_AUDIO_LOCK() uint16_t cbx68_sr=0;if(audio_super)__asm__ volatile("move.w %%sr,%0\n ori.w #0x0700,%%sr":"=d"(cbx68_sr)::"memory")
+#define CBX68_AUDIO_UNLOCK() if(audio_super)__asm__ volatile("move.w %0,%%sr"::"d"(cbx68_sr):"memory")
+#else
+#define CBX68_AUDIO_LOCK()
+#define CBX68_AUDIO_UNLOCK()
+#endif
 
 OSoundInt::OSoundInt()
 {
@@ -29,6 +41,9 @@ OSoundInt::~OSoundInt()
 
 void OSoundInt::init()
 {
+#ifdef OR_X68K
+    audio_hold = 1;
+#endif
     if (pcm == NULL)
         pcm = new SegaPCM(SOUND_CLOCK, &assets.pcm, pcm_ram, SegaPCM::BANK_512);       
 
@@ -48,18 +63,23 @@ void OSoundInt::init()
         engine_data[i] = 0;
 
     osound.init(ym, pcm_ram);
+#ifdef OR_X68K
+    audio_hold = 0;
+#endif
 }
 
 // Clear sound queue
 // Source: 0x5086
 void OSoundInt::reset()
 {
+    CBX68_AUDIO_LOCK();
     sound_counter = 0;
     sound_head    = 0;
     sound_tail    = 0;
     sounds_queued = 0;
 
     audio_ticks = 0;
+    CBX68_AUDIO_UNLOCK();
 }
 
 void OSoundInt::tick()
@@ -157,15 +177,22 @@ void OSoundInt::queue_sound(uint8_t snd)
 void OSoundInt::add_to_queue(uint8_t snd)
 {
     // Local requirement: suppress music only; preserve effects and engine commands.
+    // (r031: on the X68000 the music plays on the FM chip)
+#ifndef OR_X68K
     if (snd == sound::MUSIC_BREEZE || snd == sound::MUSIC_SPLASH || snd == sound::MUSIC_MAGICAL || snd == sound::MUSIC_CUSTOM || snd == sound::MUSIC_LASTWAVE) return;
+#endif
     // Add sound to the tail end of the queue
+    CBX68_AUDIO_LOCK();
     queue[sound_tail] = snd;
     sound_tail = (sound_tail + 1) & QUEUE_LENGTH;
     sounds_queued++;
+    CBX68_AUDIO_UNLOCK();
 }
 
 void OSoundInt::queue_clear()
 {
+    CBX68_AUDIO_LOCK();
     sound_tail = 0;
     sounds_queued = 0;
+    CBX68_AUDIO_UNLOCK();
 }
