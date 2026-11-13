@@ -50,6 +50,7 @@ int main(int argc,char**argv) {
     // are off when no driver has turned them on (a 68060 accelerator without its driver). They are
     // turned on here (IOCS _SYS_STAT), and what was found is put back at the end (platform_exit).
     native_cache_on();
+    atexit(native_cache_restore);   // also on the early exits (missing ROMs ...); platform_exit calls it too
     if(native_cache_before<0)puts("MPU cache: this system has no cache control (IOCS _SYS_STAT); if this is a 68030 or above, the game is much slower with the caches off.");
     else printf("MPU cache: was %d%s\n",native_cache_before,native_cache_was_set?", turned on":"");
     fflush(stdout);
