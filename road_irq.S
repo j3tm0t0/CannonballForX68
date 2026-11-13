@@ -156,8 +156,42 @@ road_raster_irq:
  bcc 1f
  move.w 44(%a0),0xeb0808
 1:
+ /* What is left of the mask word: the number of rows after this one that have no register to
+    write and no job list (road_rows_changed). While the job lists run (scenery_scan set) they
+    get no interrupt: R09 gets the line of the row after them, the row pointers step over them,
+    and their (empty) job lists count as passed, like the lists of rows that had an interrupt.
+    While the vertical blank's work is still loading the start state (scenery_scan 0), every
+    row keeps its interrupt, so the lists owed when that work ends are taken up a row later. */
+ and.l #63,%d0
+ beq 6f
+ tst.l scenery_scan
+ beq 6f
+ add.l %d0,road_mask_scan
+ add.l %d0,road_mask_scan
+ add.w %d0,scenery_owed
+#ifdef CBX68_TRACE
+ move.w %d0,scenery_idle
+#endif
+ move.w %d0,-(%sp)
+ add.w %d0,%d0
+ add.w 46(%a0),%d0             /* the line of the next row, and two more for each row stepped over */
+ cmp.w #72+224*2,%d0
+ bcs 5f
+ move.w #1023,%d0              /* past the last row: no more interrupts in this frame */
+5:
+ move.w %d0,0xe80012
+ moveq #0,%d0
+ move.w (%sp)+,%d0
+ mulu.w #48,%d0
+ lea 48(%a0,%d0.l),%a0
+ bra 7f
+6:
+#ifdef CBX68_TRACE
+ clr.w scenery_idle
+#endif
  move.w 46(%a0),0xe80012
  lea 48(%a0),%a0
+7:
  move.l (%sp)+,%d0
  move.l %a0,road_scan
  /* End of service here: the scenery jobs below run with the interrupt mask at 5, so the next
@@ -172,7 +206,13 @@ road_raster_irq:
  addq.w #1,scenery_owed
 #ifdef CBX68_TRACE
  /* how far the jobs are behind: the largest count, and the lines where it is over 3 */
+ /* (scenery_idle: the rows the last interrupt stepped over lie ahead, their lists are not behind) */
  move.w scenery_owed,%a0
+ sub.w scenery_idle,%a0
+ cmp.w #0,%a0
+ bge 8f
+ sub.l %a0,%a0
+8:
  cmp.w scenery_owed_max,%a0
  bls 8f
  move.w %a0,scenery_owed_max
@@ -226,7 +266,12 @@ road_raster_irq:
  bhi 3b
  moveq #13,%d1
  sub.w %d0,%d1
- cmp.w scenery_owed,%d1
+ move.w scenery_owed,%d0
+ sub.w scenery_idle,%d0          /* (as above; never below 0) */
+ bcc 8f
+ moveq #0,%d0
+8:
+ cmp.w %d0,%d1
  bhi 3b
  addq.l #1,scenery_missed
 #endif

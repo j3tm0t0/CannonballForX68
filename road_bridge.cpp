@@ -206,6 +206,7 @@ void road_build(const HWRoad&r,const uint16_t*pal,RoadFrame&f){
   if(!(row.road_enable&8)&&!(up.road_enable&8)&&!(down.road_enable&8))row.bg1=up.bg1;}
 }
 // After everything that changes the rows (road_build, visuals_build): see RoadFrame::row_changed.
+// CBX68_PROF: every row keeps its interrupt (the profiler takes one sample a line).
 void road_rows_changed(RoadFrame&f){
  f.row_changed[0]=0x3ff;
  for(unsigned y=1;y<224;y++){const RoadRow&a=f.rows[y-1],&b=f.rows[y];unsigned m=0;
@@ -213,7 +214,47 @@ void road_rows_changed(RoadFrame&f){
   if(memcmp(a.front,b.front,sizeof a.front))m|=8;if(memcmp(a.back,b.back,sizeof a.back))m|=16;if(memcmp(a.ground,b.ground,sizeof a.ground))m|=32;
   if(a.bg_y!=b.bg_y)m|=64;if(a.bg_far_y!=b.bg_far_y)m|=128;if(a.control!=b.control)m|=256;if(a.road_enable!=b.road_enable)m|=512;
   f.row_changed[y]=uint16_t(m);}
+ // Rows that need no raster interrupt: no register to write and no job list of the scenery.
+ // Every row says how many such rows follow it (bits 10-15, at most 63); the interrupt of a
+ // row steps over them (road_irq.S).
+#ifndef CBX68_PROF
+ const uint32_t*const job=f.visual.scenery.line_job;unsigned run=0;
+ for(int y=223;y>=0;y--){
+  const bool idle=!f.row_changed[y]&&!job[y];
+  f.row_changed[y]=uint16_t(f.row_changed[y]|((run<63?run:63)<<10));
+  run=idle?run+1:0;}
+#endif
 }
+#ifndef OR_X68K
+// PC check of road_rows_changed(): what the raster interrupt (road_irq.S) does with the rows.
+// It writes the register groups named in a row's mask; from row `from` on (the row at which the
+// job lists start to run) it then steps over the rows the mask says need no interrupt, and asks
+// for the next interrupt at the line worked out as in the assembly. Every row, stepped over or
+// not, must find all its values in the registers, no row with a job list may be stepped over,
+// and the next interrupt must be at the row the steps end at. Tried for every `from`.
+// Returns 0, or the failing row + 1.
+unsigned road_rows_check(const RoadFrame&f){
+ for(unsigned from=0;from<=224;from++){
+  RoadRow reg;memset(&reg,0,sizeof reg);
+  auto same=[&](const RoadRow&r){return reg.bg0==r.bg0&&reg.bg1==r.bg1&&reg.gpage==r.gpage&&!memcmp(reg.front,r.front,sizeof r.front)&&!memcmp(reg.back,r.back,sizeof r.back)&&
+   !memcmp(reg.ground,r.ground,sizeof r.ground)&&reg.bg_y==r.bg_y&&reg.bg_far_y==r.bg_far_y&&reg.control==r.control&&reg.road_enable==r.road_enable;};
+  unsigned y=0;
+  while(y<224){
+   const RoadRow&r=f.rows[y];const unsigned m=f.row_changed[y];unsigned skip=m>>10;
+   if(m&1)reg.bg0=r.bg0;if(m&2)reg.bg1=r.bg1;if(m&4)reg.gpage=r.gpage;
+   if(m&8)memcpy(reg.front,r.front,sizeof r.front);if(m&16)memcpy(reg.back,r.back,sizeof r.back);if(m&32)memcpy(reg.ground,r.ground,sizeof r.ground);
+   if(m&64)reg.bg_y=r.bg_y;if(m&128)reg.bg_far_y=r.bg_far_y;if(m&256)reg.control=r.control;if(m&512)reg.road_enable=r.road_enable;
+   if(!same(r))return y+1;
+   if(y<from)skip=0;
+   unsigned line=r.next;if(skip){line=(r.next+2*skip)&0xffff;if(line>=72+224*2)line=1023;}
+   const unsigned n=y+1+skip;
+   if(n>224||line!=(n==224?1023u:72+n*2))return y+1;
+   for(unsigned k=y+1;k<n;k++)if(!same(f.rows[k])||f.visual.scenery.line_job[k])return k+1;
+   y=n;}
+ }
+ return 0;
+}
+#endif
 static unsigned bgpixel(const uint16_t*map,uint32_t xy,int x,int y){
  unsigned sx=((xy>>16)+x)&511,sy=((xy&511)+y)&511;
  unsigned code=map[(sy>>3)*64+(sx>>3)]&255;

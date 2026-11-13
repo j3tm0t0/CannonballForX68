@@ -1563,7 +1563,7 @@ static void build_scenery(SceneryPacket&S,const uint16_t*pal,CarPacket&car,const
 }
 // Raster/vblank side. scenery_scan points at the job pointer of the next raster interrupt.
 static uint32_t scenery_zero[SCENERY_LINES];
-extern "C" {volatile uint32_t scenery_scan=0;volatile uint16_t scenery_owed=0,scenery_owed_max=0;volatile uint32_t scenery_late_lines=0,scenery_missed=0;volatile uint16_t scenery_line=0;volatile uint8_t scenery_busy=0,scenery_gen=0;void scenery_vblank(const RoadRow*rows);}
+extern "C" {volatile uint32_t scenery_scan=0;volatile uint16_t scenery_owed=0,scenery_owed_max=0;volatile uint32_t scenery_late_lines=0,scenery_missed=0;volatile uint16_t scenery_line=0,scenery_idle=0;volatile uint8_t scenery_busy=0,scenery_gen=0;void scenery_vblank(const RoadRow*rows);}
 static void scenery_run(const uint32_t*j){
  while(uint32_t dst=*j++){uint32_t n=*j++ +1;
 #ifdef OR_X68K
