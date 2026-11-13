@@ -363,8 +363,14 @@ static void ring_stream(unsigned l,int target,unsigned y0,unsigned shown,bool re
   R.dirty_all=false;R.dirty_half[0]=R.dirty_half[1]=false;R.pass_active=false;memset(R.pass_cols,0,sizeof R.pass_cols);++full_streams;
  }else{
   bool wrote=false;
-  if(d>0)for(int i=0;i<d;i++){ring_column_shown(l,R.loaded+416+i);wrote=true;}
-  else for(int i=d;i<0;i++){ring_column_shown(l,R.loaded-96+i);wrote=true;}
+  // r031j: the new columns are written row by row (each shown row: the span of new columns),
+  // not column by column: the layer page, the copy of the GVRAM bytes and the GVRAM are then read
+  // and written along their rows, a few cache lines a row instead of one a pixel. Same pixels.
+  if(d){const int first=d>0?R.loaded+416:R.loaded-96+d;const unsigned count=unsigned(d>0?d:-d);
+   for(unsigned y=0;y<512;y++)if(R.row_shown[y])ring_row_span(l,first,count,y);
+   for(unsigned i=0;i<count;i++){const unsigned c=unsigned(first+int(i))&511;if(R.column_dirty[c]){R.column_dirty[c]=false;--R.dirty_count;}
+    ++background_columns;++ring_column_count[l];}
+   wrote=true;}
   if(wrote)ring_drop_hidden(R);
  }
  if(R.dirty_all){
