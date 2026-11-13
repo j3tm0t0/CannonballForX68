@@ -146,14 +146,14 @@ static void platform_init(){
  HW16(0xeb0808)=0x0219;
  // Line budget of the scenery jobs from the time a long written to the PCG takes with the sprite
  // display on (MFP timer C, 50 us a step; pattern 127 is in the scenery pool and is loaded
- // before it is shown). 75.5 us of longs a line: 64 at the 1.18 us this loop takes on XEiJ at 16 MHz, where 64 was found
- // to keep every job list in time and 72 was not.
+ // before it is shown). 60 us of longs a line period (63.5 us): the rest is for the line's own
+ // registers and the other interrupts. XEiJ 060turbo: 50 without wait cycles, 31 with them.
  {volatile uint32_t*q=(volatile uint32_t*)(0xeb8000UL+127*128);
   unsigned t0=HW8(0xe88023),t=t0;uint32_t guard=0;while(t==t0&&++guard<200000UL)t=HW8(0xe88023);t0=t;
   uint32_t n=0;unsigned steps=0;
   while(steps<40&&n<400000UL){for(unsigned j=0;j<32;j++)q[j]=0;n+=32;t=HW8(0xe88023);steps=(t0+200-t)%200;}
   pcg_long_ns=steps?steps*50000UL/n:0;
-  if(pcg_long_ns)visuals_set_line_budget(unsigned(75500UL/pcg_long_ns));}
+  if(pcg_long_ns)visuals_set_line_budget(unsigned(60000UL/pcg_long_ns));}
  restore_irqs(sr);
  native_started=native_clock();native_frames=0;
  fine_start=fine_phase_start=platform_fine_clock();
