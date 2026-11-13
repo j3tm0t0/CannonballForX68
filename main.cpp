@@ -55,7 +55,9 @@ int main(int argc,char**argv) {
      // SKIP / NOSKIP: leave pictures out when the machine cannot draw one every 2 refreshes, so the
      // game keeps its speed (default: on in a normal game, off in a measured run with a frame count)
      if(!strcmp(w,"skip"))native_skip_mode=1;
-     if(!strcmp(w,"noskip"))native_skip_mode=0;}
+     if(!strcmp(w,"noskip"))native_skip_mode=0;
+     if(!strcmp(w,"nosound"))audio_enabled=0;}   // r031: FM sound off
+    if(native_hz60)audio_ticks_per_blank=2083;   // 125 Hz / 60 Hz
     if(native_skip_mode<0)native_skip_mode=max_frames==0?1:0;
 #endif
     cbx68_test=argc>1&&(argv[1][0]|32)=='t'&&(argv[1][1]|32)=='e'&&(argv[1][2]|32)=='s'&&(argv[1][3]|32)=='t'&&!argv[1][4];
@@ -73,7 +75,7 @@ int main(int argc,char**argv) {
     // Cannonball for x68: 5th argument = ROM folder (default ROMS\, as Cannonball's roms/ folder)
     {extern const char* cbx68_rom_path;
      auto option_word=[](const char*a){char w[8]={0};for(int k=0;k<7&&a[k];k++)w[k]=char(a[k]|32);
-      return !strcmp(w,"vsync")||!strcmp(w,"clock")||!strcmp(w,"hz60")||!strcmp(w,"skip")||!strcmp(w,"noskip");};
+      return !strcmp(w,"vsync")||!strcmp(w,"clock")||!strcmp(w,"hz60")||!strcmp(w,"skip")||!strcmp(w,"noskip")||!strcmp(w,"nosound");};
      if(argc>5&&!option_word(argv[5]))cbx68_rom_path=argv[5];}
     if(argc>4){if(!strcmp(argv[4],"road")||visual_cycle)visual_mode=0;else if(!strcmp(argv[4],"bg"))visual_mode=1;else if(!strcmp(argv[4],"car"))visual_mode=2;else if(!strcmp(argv[4],"both"))visual_mode=3;}
     memset(&config.engine,0,sizeof config.engine);

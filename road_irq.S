@@ -76,6 +76,8 @@ vblank_work:
  move.l road_active,-(%sp)
  jsr scenery_vblank
  addq.l #4,%sp
+ /* r031: the sound code, 125 times a second */
+ jsr audio_vblank
  rts
 road_raster_irq:
  move.l %a0,-(%sp)

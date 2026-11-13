@@ -17,7 +17,10 @@ echo road_bridge.cpp >> build/sources_x68k.txt
 echo road_irq.S >> build/sources_x68k.txt
 echo scenery_tiles.S >> build/sources_x68k.txt
 echo draw_profile.cpp >> build/sources_x68k.txt
-echo audio_silent.cpp >> build/sources_x68k.txt
+# r031: the sound code of Cannonball with the X68000's FM chip (audio_x68k.cpp) instead of audio_silent.cpp
+echo vendor/main/engine/audio/osound.cpp >> build/sources_x68k.txt
+echo vendor/main/engine/audio/osoundint.cpp >> build/sources_x68k.txt
+echo audio_x68k.cpp >> build/sources_x68k.txt
 echo assetloader_local.cpp >> build/sources_x68k.txt
 cat build/sources_x68k.txt | xargs -P 4 -I{} sh -c 'f="$1"; o="build/x68k/$(echo "$f" | tr / _).o"; "$CXX" -DOR_X68K ${CBX68_DEFS:-} -m68060 -msoft-float -std=c++14 -O2 -w -fno-strict-aliasing -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections -Istub -Ivendor/main -c "$f" -o "$o"' sh {}
 # r025b: code compiled for 68060 (soft float); linked with the 68000 libraries (crt0, libc, libstdc++, libgcc) known to work
