@@ -279,6 +279,18 @@ int main(int argc,char**argv) {
             input.keys[Input::COIN]=auto_start&&frame-cycle_start>=20&&frame-cycle_start<28;
             input.keys[Input::START]=auto_start&&frame-cycle_start>=60&&frame-cycle_start<68;
             if(outrun.game_state==GS_INGAME&&ingame<0)ingame=frame;
+#ifdef OR_X68K
+            // Driving demo (3rd argument left/right, not a measured run): a different tune from the
+            // last game, picked at random on the music select screen by holding the wheel left
+            // (MAGICAL SOUND SHOWER), centre (PASSING BREEZE) or right (SPLASH WAVE).
+            if(road_demo&&max_frames==0){
+                static int tune=-1,last_tune=-1;
+                if(outrun.game_state==GS_MUSIC){
+                    if(tune<0){const unsigned r=unsigned(native_clock());tune=last_tune<0?int(r%3):(last_tune+1+int(r&1))%3;last_tune=tune;}
+                    input.keys[Input::LEFT]=tune==0;input.keys[Input::RIGHT]=tune==2;
+                }else tune=-1;
+            }
+#endif
             // r025: time limit 99 for every new game (set while the start sequence runs, before the
             // countdown; checkpoint extensions still add and stop at 99). Host: only with STAGE1_TIME99=1
             // so the recorded game states stay comparable with r018.
