@@ -216,6 +216,8 @@ static bool platform_draw_due(int frame){
 }
 static void platform_sync(int frame){
  // Use one display period as the deadline; never repay old missed periods.
+ // FROMn (bench): the steps before the measured part are not drawn and need no pace
+ if(frame+1<bench_from)return;
  static uint32_t deadline=0;static bool previous30=true;
  bool mode30=render_schedule.draw30;
  if(mode30&&!(frame&1))return;
