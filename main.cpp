@@ -73,6 +73,10 @@ int main(int argc,char**argv) {
      // SKIP / NOSKIP: leave pictures out when the machine cannot draw one every 2 refreshes, so the
      // game keeps its speed (default: on in a normal game, off in a measured run with a frame count)
      if(!strcmp(w,"skip"))native_skip_mode=1;
+     // FROMn: measured run of one part of the course: the game steps before step n are not drawn,
+     // and the report adds the counts from step n on (SEGMENT). HOLD: time stays at 99 (as T).
+     if(w[0]=='f'&&w[1]=='r'&&w[2]=='o'&&w[3]=='m')bench_from=(atoi(argv[a]+4)+1)&~1;   // (a game step: even)
+     if(!strcmp(w,"hold"))bench_hold=true;
      if(!strcmp(w,"noskip"))native_skip_mode=0;
      if(!strcmp(w,"nosound"))audio_enabled=0;   // r031: sound off
      if(!strcmp(w,"nopcm"))audio_pcm_enabled=0;   // r031c: FM only
@@ -97,7 +101,7 @@ int main(int argc,char**argv) {
     // Cannonball for x68: 5th argument = ROM folder (default ROMS\, as Cannonball's roms/ folder)
     {extern const char* cbx68_rom_path;
      auto option_word=[](const char*a){char w[8]={0};for(int k=0;k<7&&a[k];k++)w[k]=char(a[k]|32);
-      return !strcmp(w,"vsync")||!strcmp(w,"clock")||!strcmp(w,"hz60")||!strcmp(w,"skip")||!strcmp(w,"noskip")||!strcmp(w,"nosound")||!strcmp(w,"nopcm")||!strcmp(w,"nofm")||!strcmp(w,"light")||!strcmp(w,"full")||!strcmp(w,"main");};
+      return !strcmp(w,"vsync")||!strcmp(w,"clock")||!strcmp(w,"hz60")||!strcmp(w,"skip")||!strcmp(w,"noskip")||!strcmp(w,"nosound")||!strcmp(w,"nopcm")||!strcmp(w,"nofm")||!strcmp(w,"light")||!strcmp(w,"full")||!strcmp(w,"main")||!strcmp(w,"hold")||(w[0]=='f'&&w[1]=='r'&&w[2]=='o'&&w[3]=='m');};
      if(argc>5&&!option_word(argv[5]))cbx68_rom_path=argv[5];}
     if(argc>4){if(!strcmp(argv[4],"road")||visual_cycle)visual_mode=0;else if(!strcmp(argv[4],"bg"))visual_mode=1;else if(!strcmp(argv[4],"car"))visual_mode=2;else if(!strcmp(argv[4],"both"))visual_mode=3;}
     memset(&config.engine,0,sizeof config.engine);
@@ -206,6 +210,9 @@ int main(int argc,char**argv) {
  if(const char*lv=getenv("CBX68_LIGHT")){extern void visuals_set_light_rewrites(unsigned);visuals_set_light(true);visuals_set_light_rewrites(unsigned(atoi(lv)));}   // PC check of the light mode (r031l): CBX68_LIGHT=<rewrites>
 #endif
     bool draw_next=true;
+#ifdef OR_X68K
+    uint32_t seg_vblanks=0,seg_draws=0;time_hold=bench_hold;
+#endif
     for(int frame=0;(!max_frames||frame<max_frames);frame++) {
         if(visual_cycle)visual_mode=(frame/200)&3;
         bool logic=(frame&1)==0;cannonball::tick_frame=logic;
@@ -213,6 +220,8 @@ int main(int argc,char**argv) {
         // r031m: whether the picture of this game step (drawn on the next loop pass) will be skipped
         // is decided before the step, so the step can leave out what only the picture needs.
         if(logic){draw_next=true;if(render_schedule.should_draw(frame+1)&&native_skip_mode>0&&!cbx68_test)draw_next=platform_draw_due(frame+1);
+         if(frame+1<bench_from)draw_next=false;
+         if(frame==bench_from)seg_vblanks=road_vblanks;
          cannonball::skip_render=SKIP_RENDER_PREP&&!draw_next;}
 #else
         // PC check of r031m: STAGE1_DRAW_EVERY=N draws only every Nth game step's picture, and
@@ -334,6 +343,9 @@ int main(int argc,char**argv) {
 #endif
         bool draw=render_schedule.should_draw(frame);
         if(draw&&!draw_next)draw=false;   // (decided before the game step, see above)
+#ifdef OR_X68K
+        if(draw&&frame>=bench_from)++seg_draws;
+#endif
         if(draw){
 #ifdef OR_X68K
             RoadFrame& road_frame=platform_road_back();
@@ -408,6 +420,9 @@ int main(int argc,char**argv) {
     report_printf("road_ctrl=%u split_state=%u horizon=%d curve=%d route=%d\n",unsigned(oroad.road_ctrl),unsigned(oinitengine.rd_split_state),int(oroad.horizon_y_bak),int(oinitengine.road_curve),int(oinitengine.route_selected));
     report_printf("VISUAL road=%lu bg=%lu car=%lu both=%lu bg_columns=%lu car_frames=%lu max_tiles=%u max_patterns=%u max_line=%u overflow=%lu\n",(unsigned long)visual_frames[0],(unsigned long)visual_frames[1],(unsigned long)visual_frames[2],(unsigned long)visual_frames[3],(unsigned long)background_columns,(unsigned long)car_frames,car_peak_tiles,car_peak_patterns,car_peak_line,(unsigned long)car_overflows);
     report_printf("CAR TEXT frames=%lu\n",(unsigned long)car_text_frames);
+#ifdef OR_X68K
+    if(bench_from)report_printf("SEGMENT from=%d vblanks=%lu draws=%lu stage=%d\n",bench_from,(unsigned long)(road_vblanks-seg_vblanks),(unsigned long)seg_draws,int(ostats.cur_stage));
+#endif
 #ifdef OR_X68K
     {const char*names[4]={"ROAD","BG","CAR","BOTH"};
      for(unsigned m=0;m<4;m++){uint32_t d=native_visual_draws[m];if(!d)continue;

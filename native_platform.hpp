@@ -200,6 +200,7 @@ static void platform_init(){
 #define CBX68_SKIP_RENDER_PREP 1
 #endif
 static const bool SKIP_RENDER_PREP=CBX68_SKIP_RENDER_PREP;   // r031m: a step whose picture is skipped leaves out what only the picture needs
+static int bench_from=0;static bool bench_hold=false;   // main.cpp: FROMn, HOLD
 static int native_skip_mode=-1,native_lag=0;static uint32_t native_skipped_draws=0;
 // (the schedule: frame f0 belongs at screen refresh v0, and every frame after it one refresh later)
 static uint32_t native_skip_v0=0;static int native_skip_f0=0;static bool native_skip_started=false;
