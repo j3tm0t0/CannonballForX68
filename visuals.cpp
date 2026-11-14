@@ -1131,9 +1131,11 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
    if(hi>=0&&lo<=223)for(int ty=std::max(0,lo)>>4;ty<=std::min(223,hi)>>4;ty++)if(dirty_rows&(1u<<ty)){draw_it=true;break;}}
   if(draw_it){uint16_t table[16];const unsigned base=COLOR_BASE_SCENERY+((r[5]&127)<<4);const bool shadow=(r[3]&0x4000)!=0;
    for(unsigned k=0;k<16;k++){if(k==0||k==15||(shadow&&k==10)){table[k]=0;continue;}unsigned q=scenery_map[base|k];table[k]=uint16_t(q==255?0:q?q:slot(base|k));}
-   int xb[2]={320,-1};video.sprite_layer->capture_entry_table8(r,scenery_pixels,table,xb);
+   // (a partial pass draws only the rows of 16 lines that changed: the kept tiles stand for the others)
+   const uint32_t row_mask=partial?dirty_rows:0xffffffffu;
+   int xb[2]={320,-1};video.sprite_layer->capture_entry_table8(r,scenery_pixels,table,xb,row_mask);
    const int x0=std::max(0,xb[0]),x1=std::min(319,xb[1]),y0=std::max(0,std::min(top,bottom)),y1=std::min(223,std::max(top,bottom));
-   if(x0<=x1&&y0<=y1){const uint32_t cols=((2u<<(x1>>4))-1)&~((1u<<(x0>>4))-1);for(int ty=y0>>4;ty<=y1>>4;ty++)tile_live[ty]|=cols;}}
+   if(x0<=x1&&y0<=y1){const uint32_t cols=((2u<<(x1>>4))-1)&~((1u<<(x0>>4))-1);for(int ty=y0>>4;ty<=y1>>4;ty++)if((row_mask>>ty)&1)tile_live[ty]|=cols;}}
 #ifndef OR_X68K
   video.sprite_layer->capture_entry(r,scenery_std);
 #endif

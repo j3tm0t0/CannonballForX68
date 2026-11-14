@@ -21,6 +21,7 @@ struct SpriteFastParams {
     uint16_t address,pitch,hzoom,vzoom,color;
     const uint16_t* custom=nullptr;   // r026e: own 16-entry nibble table (roadside objects)
     int* xbounds=nullptr;             // if set: {min,max} screen x that any drawn row may have touched (widened, never narrowed)
+    uint32_t row_mask=0xffffffffu;    // bit n clear: screen rows 16n..16n+15 are not drawn
 };
 #if defined(__GNUC__)
 #define SPRITE_INLINE static inline __attribute__((always_inline))
@@ -218,7 +219,9 @@ static uint16_t sprite_visible(const uint32_t* bank,P* frame,const SpriteFastPar
     int row_index=(top+(dy>0?first:-first))*width;
     const int row_step=dy>0?width:-width;
     unsigned words_seen=0;   // most words one row read (each word moves dst by q or q+1 pixels)
+    const uint32_t row_mask=p.row_mask;int screen_row=top+(dy>0?first:-first);
     for(int y=first;y<last;y++){
+        if(!((row_mask>>(unsigned(screen_row)>>4))&1)){yacc+=vz;address+=advance[yacc>>9];yacc&=0x1ff;row_index+=row_step;screen_row+=dy;continue;}
         P* const row=frame+row_index;
         const uint16_t index=uint16_t(address);
         const bool wraps=Flip?unsigned(index)+1<words_max:unsigned(index)+words_max>0x10000u;
@@ -230,7 +233,7 @@ static uint16_t sprite_visible(const uint32_t* bank,P* frame,const SpriteFastPar
         }
         const unsigned n=uint16_t(Flip?index-scratch:scratch-index)+1u;
         if(n>words_seen)words_seen=n;
-        yacc+=vz;address+=advance[yacc>>9];yacc&=0x1ff;row_index+=row_step;
+        yacc+=vz;address+=advance[yacc>>9];yacc&=0x1ff;row_index+=row_step;screen_row+=dy;
     }
     if(p.xbounds){
         const int reach_px=int(words_seen)*most+1;
