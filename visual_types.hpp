@@ -15,7 +15,7 @@ struct CarPacket {
 // row r is rewritten during row r+1 and shown again in row r+2 (raster interrupt jobs).
 // Job list: {address, longs-1, data...} ... 0. Addresses on the X68000, offsets+1 on the PC.
 enum {SCENERY_MAX=448,SCENERY_JOB_LONGS=18000,SCENERY_LINES=256};
-struct ScenerySprite {int16_t x,y;uint8_t block,row,kept,pad;};
+struct ScenerySprite {int16_t x,y;uint8_t block,row,kept,weight;};   // weight: longs of the pattern that are not 0 (0..32)
 struct SceneryPacket {
  uint16_t count,kept,dropped,blocks,first_block,dropped_banks,reused,line_longs_max,shared,car_dropped;
  uint16_t palette[13][16];

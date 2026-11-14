@@ -1164,6 +1164,8 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  static uint16_t check_copy[320*224];memcpy(check_copy,scenery_std,sizeof check_copy);scenery_check_pixels=check_copy;memset(scenery_std,0,sizeof scenery_std);
 #endif
  static uint32_t sprite_hash[SCENERY_MAX];
+ // longs of a pattern that are not 0 (kept with the sprite: read while the pattern is in the cache)
+ auto weight_of=[](const uint32_t*p)->uint8_t{unsigned w=0;for(unsigned q=0;q<32;q++)w+=p[q]!=0;return uint8_t(w);};
  // r026d: fast path for colours already placed; colours are learned on every 8th frame only;
  // pixel pairs that are both empty are skipped; one-block tiles are encoded without tests.
  static uint8_t met_q[256];
@@ -1243,7 +1245,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
    ScenerySprite&sp=S.sprite[S.count];uint32_t*enc=S.pcg[S.count];
    sp.x=int16_t(tx*16+16);sp.y=int16_t(ty*16+16);sp.block=uint8_t(bnum);sp.row=uint8_t(ty);sp.kept=0;
 #if defined(OR_X68K)&&!defined(CBX68_ASM_CHECK)
-   sprite_hash[S.count]=scenery_tile_finish8(tile_src,rowbits,rowLR,enc);++S.count;
+   sprite_hash[S.count]=scenery_tile_finish8(tile_src,rowbits,rowLR,enc);sp.weight=weight_of(rowLR);++S.count;
    continue;
 #endif
    uint32_t h=2166136261UL;
@@ -1256,7 +1258,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
     for(unsigned yy=0;yy<rows&&!bad;yy++)for(unsigned xx=0;xx<16;xx++){const uint8_t want=(rowbits&(1u<<yy))?0:chk_px[yy*16+xx];if(tile_src[yy*320+xx]!=want){bad=true;break;}}
     if(bad)++asm_check[4];}
 #endif
-   sprite_hash[S.count]=h;++S.count;
+   sprite_hash[S.count]=h;sp.weight=weight_of(rowLR);++S.count;
    for(unsigned yy=0;yy<rows;yy++)if(rowbits&(1u<<yy)){alias_u32*s32=(alias_u32*)(tile_src+yy*320);s32[0]=s32[1]=s32[2]=s32[3]=0;}
    continue;}
   // several blocks: one sprite per block, in block order (dropped when the list is full)
@@ -1278,7 +1280,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   if(rows_done&&take==nb){uint32_t*encp[16];
    for(unsigned j=0;j<nb;j++){memset(S.pcg[first+j],0,128);encp[blocks_here[j]+1]=S.pcg[first+j];}
    scenery_tile_split8(tile_src,rowbits,encp);
-   for(unsigned j=0;j<nb;j++)sprite_hash[first+j]=scenery_pcg_hash(S.pcg[first+j]);
+   for(unsigned j=0;j<nb;j++){sprite_hash[first+j]=scenery_pcg_hash(S.pcg[first+j]);S.sprite[first+j].weight=weight_of(S.pcg[first+j]);}
    continue;}
 #endif
 #endif
@@ -1288,7 +1290,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
      q=code(src[xx+8]);if(q){unsigned j=ord[q>>4];rj[j]|=uint32_t(q&15)<<(28-4*xx);}}
     alias_u32*s32=(alias_u32*)src;s32[0]=s32[1]=s32[2]=s32[3]=0;}
    for(unsigned j=0;j<take;j++){uint32_t*enc=S.pcg[first+j];enc[yy]=lj[j];enc[yy+16]=rj[j];hj[j]^=lj[j];hj[j]*=16777619UL;hj[j]^=rj[j];hj[j]*=16777619UL;}}
-  for(unsigned j=0;j<take;j++)sprite_hash[first+j]=hj[j];
+  for(unsigned j=0;j<take;j++){sprite_hash[first+j]=hj[j];S.sprite[first+j].weight=weight_of(S.pcg[first+j]);}
 #if defined(OR_X68K)&&defined(CBX68_ASM_CHECK)
   if(split_chk){bool bad=false;for(unsigned j=0;j<nb;j++)if(split_hash[j]!=hj[j]||memcmp(split_enc[j],S.pcg[first+j],128))bad=true;
    for(unsigned yy=0;yy<rows&&!bad;yy++)if(rowbits&(1u<<yy))for(unsigned xx=0;xx<16;xx++)if(split_px[yy*320+xx])bad=true;
@@ -1374,7 +1376,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  static uint8_t left_out[SCENERY_MAX];
  if(scenery_light){   // keep the tiles with the most pixels (see SCENERY_LIGHT_REWRITES)
   static uint8_t weight[SCENERY_MAX];unsigned count[34]={0};
-  for(unsigned i=0;i<S.count;i++){const uint32_t*p=S.pcg[i];unsigned w=0;for(unsigned q=0;q<32;q++)w+=p[q]!=0;weight[i]=uint8_t(w);++count[w];}
+  for(unsigned i=0;i<S.count;i++){const unsigned w=S.sprite[i].weight;weight[i]=uint8_t(w);++count[w];}
   const unsigned room=(nP>car_sprites?nP-car_sprites:0)+SCENERY_LIGHT_REWRITES;
   unsigned kept=0;int cut=33;   // tiles of weight >= cut are kept; of weight cut-1 as many as still fit
   while(cut>0&&kept+count[cut-1]<=room){--cut;kept+=count[cut];}
@@ -1397,7 +1399,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
    for(unsigned r=0;r<14;r++){const unsigned a0=car_end[r]-0,b0=start[r+1];unsigned first=start[r];
     while(first<b0&&users[first]>=SCENERY_MAX)++first;   // after the car's tiles
     (void)a0;if(b0-first<12)continue;
-    for(unsigned k=first;k<b0;k++){const uint32_t*p=S.pcg[users[k]];unsigned w=0;for(unsigned q=0;q<32;q++)w+=p[q]!=0;weight[users[k]]=uint8_t(w);}
+    for(unsigned k=first;k<b0;k++)weight[users[k]]=S.sprite[users[k]].weight;
     for(unsigned k=first+1;k<b0;k++){const uint16_t u=users[k];const unsigned w=weight[u];unsigned j=k;
      while(j>first&&weight[users[j-1]]<w){users[j]=users[j-1];--j;}
      users[j]=u;}}
