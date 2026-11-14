@@ -46,8 +46,11 @@
 2:
  or.l %d6,%d5
  moveq #0,%d4
- .rept 8
- move.b (%a0)+,%d1
+ .rept 2
+ move.l (%a0)+,%d0       /* 4 pixels a read: the bytes by rotating (d1 bits 8-31 stay 0) */
+ .rept 4
+ rol.l #8,%d0
+ move.b %d0,%d1
  or.w (%a2,%d1.l*2),%d3
  .if \learn
  st (%a3,%d1.l)
@@ -56,10 +59,14 @@
  and.w %d2,%d1
  or.b %d1,%d4
  .endr
+ .endr
  move.l %d4,(%a1)
  moveq #0,%d4
- .rept 8
- move.b (%a0)+,%d1
+ .rept 2
+ move.l (%a0)+,%d0       /* 4 pixels a read: the bytes by rotating (d1 bits 8-31 stay 0) */
+ .rept 4
+ rol.l #8,%d0
+ move.b %d0,%d1
  or.w (%a2,%d1.l*2),%d3
  .if \learn
  st (%a3,%d1.l)
@@ -67,6 +74,7 @@
  lsl.l #4,%d4
  and.w %d2,%d1
  or.b %d1,%d4
+ .endr
  .endr
  move.l %d4,64(%a1)
  lea 304(%a0),%a0
