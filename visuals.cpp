@@ -968,7 +968,11 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  static bool c_force_full=false;unsigned lookup_changes=0;
  // the kept frame (r030), and for r031b where each tile row's sprites are in it and what it dropped
  static uint16_t c_count,c_blocks,c_dropped,c_dropped_banks;static uint16_t c_palette[13][16];
- static ScenerySprite c_sprite[SCENERY_MAX];static uint32_t c_pcg[SCENERY_MAX][32],c_hash[SCENERY_MAX];
+ static ScenerySprite c_sprite[SCENERY_MAX];static uint32_t c_hash[SCENERY_MAX];
+ // the kept frame's patterns: those of the frame built last (that frame is shown or waiting to be
+ // shown, never the one being built, so its patterns stay as they are; not copied any more)
+ static const uint32_t(*c_pcg)[32]=nullptr;
+ if(c_pcg==S.pcg)reuse_valid=false;   // (not reached: the frame built last is not this one)
  static uint16_t c_row_start[15],c_row_dropped[14];static uint8_t c_bcount[13];
  static uint16_t row_start[15],row_dropped[14];
  // r031d: the palette block each bank had in the kept frame, and that frame's car block count
@@ -1192,7 +1196,7 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
   if(partial&&!(dirty_rows&(1u<<ty))){   // the kept frame's sprites of this row
    unsigned a=c_row_start[ty],n=unsigned(c_row_start[ty+1])-a;
    if(S.count+n>SCENERY_MAX){const unsigned fit=SCENERY_MAX-S.count;S.dropped+=uint16_t(n-fit);scenery_overflow+=n-fit;row_dropped[ty]=uint16_t(n-fit);n=fit;}
-   memcpy(S.sprite+S.count,c_sprite+a,n*sizeof c_sprite[0]);memcpy(S.pcg+S.count,c_pcg+a,n*sizeof c_pcg[0]);memcpy(sprite_hash+S.count,c_hash+a,n*4);
+   memcpy(S.sprite+S.count,c_sprite+a,n*sizeof c_sprite[0]);memcpy(S.pcg+S.count,c_pcg+a,n*sizeof S.pcg[0]);memcpy(sprite_hash+S.count,c_hash+a,n*4);
    for(unsigned k=0;k<n;k++)S.sprite[S.count+k].kept=0;
    S.count=uint16_t(S.count+n);S.dropped=uint16_t(S.dropped+c_row_dropped[ty]);row_dropped[ty]=uint16_t(row_dropped[ty]+c_row_dropped[ty]);
    continue;}
@@ -1314,9 +1318,9 @@ static void build_scenery_body(SceneryPacket&S,const uint16_t*pal,CarPacket&car,
  // r030: keep this frame's tiles for a frame with the same sprites, or take the kept ones
  {
   if(reuse){S.count=c_count;S.blocks=c_blocks;S.dropped=c_dropped;S.dropped_banks=c_dropped_banks;memcpy(S.palette,c_palette,sizeof c_palette);
-   memcpy(S.sprite,c_sprite,S.count*sizeof c_sprite[0]);memcpy(S.pcg,c_pcg,S.count*sizeof c_pcg[0]);memcpy(sprite_hash,c_hash,S.count*4);++scenery_reuse_frames;}
+   memcpy(S.sprite,c_sprite,S.count*sizeof c_sprite[0]);memcpy(S.pcg,c_pcg,S.count*sizeof S.pcg[0]);c_pcg=S.pcg;memcpy(sprite_hash,c_hash,S.count*4);++scenery_reuse_frames;}
   else if(key_ok){c_count=S.count;c_blocks=S.blocks;c_dropped=S.dropped;c_dropped_banks=S.dropped_banks;memcpy(c_palette,S.palette,sizeof c_palette);
-   memcpy(c_sprite,S.sprite,S.count*sizeof c_sprite[0]);memcpy(c_pcg,S.pcg,S.count*sizeof c_pcg[0]);memcpy(c_hash,sprite_hash,S.count*4);
+   memcpy(c_sprite,S.sprite,S.count*sizeof c_sprite[0]);c_pcg=S.pcg;memcpy(c_hash,sprite_hash,S.count*4);
    memcpy(c_row_start,row_start,sizeof c_row_start);memcpy(c_row_dropped,row_dropped,sizeof c_row_dropped);for(unsigned b=0;b<13;b++)c_bcount[b]=uint8_t(bcount[b]);
    memcpy(reuse_key,reuse_new,key_len*2);reuse_len=key_len;reuse_valid=true;
    c_unlearned=learn?0:partial?(c_unlearned|dirty_rows):0x3fff;
