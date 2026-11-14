@@ -75,7 +75,7 @@ int main(int argc,char**argv) {
      if(!strcmp(w,"skip"))native_skip_mode=1;
      // FROMn: measured run of one part of the course: the game steps before step n are not drawn,
      // and the report adds the counts from step n on (SEGMENT). HOLD: time stays at 99 (as T).
-     if(w[0]=='f'&&w[1]=='r'&&w[2]=='o'&&w[3]=='m')bench_from=atoi(argv[a]+4);
+     if(w[0]=='f'&&w[1]=='r'&&w[2]=='o'&&w[3]=='m')bench_from=(atoi(argv[a]+4)+1)&~1;   // (a game step: even)
      if(!strcmp(w,"hold"))bench_hold=true;
      if(!strcmp(w,"noskip"))native_skip_mode=0;
      if(!strcmp(w,"nosound"))audio_enabled=0;   // r031: sound off
