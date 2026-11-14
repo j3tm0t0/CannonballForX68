@@ -1,0 +1,61 @@
+# PC check: the PC build of the pull request and of its base run the same game steps; the picture
+# digests (R028) and the job counts (R026) must be the same, and no check may report a failure.
+# The game data comes from a private store (repository secrets); it is never written to the log
+# or kept as an artifact.
+name: PC check
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: base to compare with
+        default: main
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: start, steps: 4000, env: ""}
+          - {name: light, steps: 4000, env: "CBX68_LIGHT=32"}
+          - {name: car-cache, steps: 4000, env: "STAGE1_CAR_CACHE_SKIP=1"}
+          - {name: route-LLLL, steps: 11000, env: "STAGE1_TIME_HOLD=1 STAGE1_ROUTE=LLLL"}
+          - {name: route-RRRR, steps: 11000, env: "STAGE1_TIME_HOLD=1 STAGE1_ROUTE=RRRR"}
+          - {name: route-LRLR, steps: 11000, env: "STAGE1_TIME_HOLD=1 STAGE1_ROUTE=LRLR"}
+          - {name: route-RLRL, steps: 11000, env: "STAGE1_TIME_HOLD=1 STAGE1_ROUTE=RLRL"}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: head
+          fetch-depth: 0
+      - name: base
+        run: git -C head worktree add --detach ../base "${{ github.event.pull_request.base.sha || inputs.base }}"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.CI_ROLE }}
+          aws-region: ap-northeast-1
+      - name: data
+        run: |
+          mkdir -p "$RUNNER_TEMP/d"
+          aws s3 cp --only-show-errors "s3://${{ secrets.CI_BUCKET }}/artifacts.tgz" - | tar xzf - -C "$RUNNER_TEMP/d"
+      - name: build
+        run: |
+          for d in head base; do (cd $d && sed -i 's/xargs -P [0-9]*/xargs -P 4/' build_host.sh && sh build_host.sh > build.log 2>&1) & done; wait
+          test -x head/build/host/stage1 && test -x base/build/host/stage1
+      - name: run
+        run: |
+          for d in head base; do (cd $d && env ${{ matrix.env }} CBX68_ROMS="$RUNNER_TEMP/d/ROMS/" STAGE1_CHECK_CAR=1 STAGE1_CHECK_VISUALS=1 ./build/host/stage1 ${{ matrix.steps }} 30 auto both > run.txt 2> run.err; echo "exit $?" >> run.txt) & done; wait
+      - name: compare
+        run: |
+          for d in head base; do grep -E 'DIGEST|R026|^exit' $d/run.txt > $d/digest.txt; done
+          echo "head: $(grep -c DIGEST head/digest.txt) digests, $(tail -1 head/digest.txt)"
+          bad=0
+          if ! cmp -s head/digest.txt base/digest.txt; then echo "DIFFERENT from base:"; diff base/digest.txt head/digest.txt | head -20; bad=1; fi
+          if grep -qiE 'fail|mismatch' head/run.txt head/run.err; then grep -iE 'fail|mismatch' head/run.txt head/run.err | head -10; bad=1; fi
+          exit $bad
