@@ -88,16 +88,19 @@ SPRITE_INLINE uint32_t sprite_pixels(uint32_t w,P*& dst,short& acc,short hz,shor
 template<bool Flip,int DX,bool Minify>
 SPRITE_INLINE void sprite_pixels8(uint32_t w,uint8_t*& dst,short& acc,short hz,short unit,const uint8_t* hi,const uint8_t* lo){
 #define SPRITE_PX(v) sprite_pixel<uint8_t,DX,false,Minify,false>(dst,acc,hz,unit,(v),nullptr,0)
+    // (bytes by rotating 8 bits at a time: GCC would take the middle ones with bfextu, which
+    // the 68060 runs slowly)
+    uint32_t t=w;unsigned b;
     if(!Flip){
-        unsigned b=w>>24;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
-        b=(w>>16)&255;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
-        b=(w>>8)&255;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
-        b=w&255;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
+        t=sprite_rol(t,8);SPRITE_KEEP(t);b=t&255;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
+        t=sprite_rol(t,8);SPRITE_KEEP(t);b=t&255;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
+        t=sprite_rol(t,8);SPRITE_KEEP(t);b=t&255;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
+        t=sprite_rol(t,8);SPRITE_KEEP(t);b=t&255;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
     }else{
-        unsigned b=w&255;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
-        b=(w>>8)&255;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
-        b=(w>>16)&255;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
-        b=w>>24;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
+        b=t&255;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
+        t=sprite_ror(t,8);SPRITE_KEEP(t);b=t&255;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
+        t=sprite_ror(t,8);SPRITE_KEEP(t);b=t&255;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
+        t=sprite_ror(t,8);SPRITE_KEEP(t);b=t&255;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
     }
 #undef SPRITE_PX
 }
