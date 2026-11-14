@@ -2,6 +2,7 @@
    Part of a derivative work of Cannonball (Copyright Chris White and the Cannonball team),
    released under the Cannonball licence (LICENSE / LICENSE.txt). Other notices below are kept as they were. */
 #pragma once
+#include <type_traits>
 // Exact sprite kernels (same pixels as the original renderer).
 //
 // Every row restarts the horizontal accumulator at 0, so output pixel j of a row samples
@@ -81,6 +82,25 @@ SPRITE_INLINE uint32_t sprite_pixels(uint32_t w,P*& dst,short& acc,short hz,shor
 #undef SPRITE_NEXT_PIXEL
     return t;
 }
+// 8-bit pixels without shadow (roadside objects): the 8 pixels read a byte of the word at a time
+// from two 256-entry tables (code of the upper nibble, code of the lower nibble), instead of a
+// rotate and a mask for every pixel. Same pixels in the same order as sprite_pixels.
+template<bool Flip,int DX,bool Minify>
+SPRITE_INLINE void sprite_pixels8(uint32_t w,uint8_t*& dst,short& acc,short hz,short unit,const uint8_t* hi,const uint8_t* lo){
+#define SPRITE_PX(v) sprite_pixel<uint8_t,DX,false,Minify,false>(dst,acc,hz,unit,(v),nullptr,0)
+    if(!Flip){
+        unsigned b=w>>24;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
+        b=(w>>16)&255;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
+        b=(w>>8)&255;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
+        b=w&255;SPRITE_PX(hi[b]);SPRITE_PX(lo[b]);
+    }else{
+        unsigned b=w&255;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
+        b=(w>>8)&255;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
+        b=(w>>16)&255;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
+        b=w>>24;SPRITE_PX(lo[b]);SPRITE_PX(hi[b]);
+    }
+#undef SPRITE_PX
+}
 // Rare path: word overlapping the clip edge.  Only writes; the caller advances dst/acc.
 template<typename P,bool Flip,int DX,bool Shadow,bool Minify>
 SPRITE_NOINLINE void sprite_word_clipped(uint32_t w,P* dst,short acc,short hz,const uint16_t* table,const P* lo,unsigned span){
@@ -91,6 +111,7 @@ struct SpriteRowSetup {
     int q;                     // whole outputs per word
     int stop,fast_lo,fast_hi;  // offsets from the row start
     const uint16_t* table;
+    const uint8_t* bytes;      // sprite_pixels8: [0,256) upper nibble, [256,512) lower nibble
     unsigned span;
     int left;
 };
@@ -155,7 +176,11 @@ SPRITE_NOINLINE const uint32_t* sprite_row_words(const uint32_t* src,P* row,P* d
                 continue;
             }
             // t is w rotated left by 1 (non-flip) or 5 (flip); test the end marker there.
-            const uint32_t t=sprite_pixels<P,Flip,DX,Shadow,Minify,false>(w,dst,acc,hz,unit,table,0,0);
+            uint32_t t;
+            if(std::is_same<P,uint8_t>::value&&!Shadow){
+                sprite_pixels8<Flip,DX,Minify>(w,reinterpret_cast<uint8_t*&>(dst),acc,hz,unit,s.bytes,s.bytes+256);
+                t=Flip?sprite_rol(w,5):sprite_rol(w,1);
+            }else t=sprite_pixels<P,Flip,DX,Shadow,Minify,false>(w,dst,acc,hz,unit,table,0,0);
             if(Flip?(t&0xe0000001u)==0xe0000001u:(uint16_t(t)&0x01e0)==0x01e0)return src;
         }
         while(dst<stop){
@@ -175,7 +200,11 @@ SPRITE_NOINLINE const uint32_t* sprite_row_words(const uint32_t* src,P* row,P* d
                 if(sprite_word_end<Flip>(w))return src;
                 continue;
             }
-            const uint32_t t=sprite_pixels<P,Flip,DX,Shadow,Minify,false>(w,dst,acc,hz,unit,table,0,0);
+            uint32_t t;
+            if(std::is_same<P,uint8_t>::value&&!Shadow){
+                sprite_pixels8<Flip,DX,Minify>(w,reinterpret_cast<uint8_t*&>(dst),acc,hz,unit,s.bytes,s.bytes+256);
+                t=Flip?sprite_rol(w,5):sprite_rol(w,1);
+            }else t=sprite_pixels<P,Flip,DX,Shadow,Minify,false>(w,dst,acc,hz,unit,table,0,0);
             if(Flip?(t&0xe0000001u)==0xe0000001u:(uint16_t(t)&0x01e0)==0x01e0)return src;
         }
         while(dst>=stop){
@@ -203,6 +232,16 @@ static uint16_t sprite_visible(const uint32_t* bank,P* frame,const SpriteFastPar
     if(p.custom)for(unsigned k=0;k<16;k++)table[k]=p.custom[k];
     else for(unsigned k=0;k<16;k++)table[k]=(k==0||k==15)?0:(Shadow&&k==10)?0x8000:uint16_t(p.color|k);
     s.table=table;
+    alignas(4) uint8_t bytes[512];
+    s.bytes=bytes;
+    if(std::is_same<P,uint8_t>::value&&!Shadow){
+        uint32_t* const hi=reinterpret_cast<uint32_t*>(bytes);
+        for(unsigned k=0;k<16;k++){const uint32_t v=uint32_t(uint8_t(table[k]))*0x01010101u;hi[k*4]=hi[k*4+1]=hi[k*4+2]=hi[k*4+3]=v;}
+        for(unsigned k=0;k<16;k++)bytes[256+k]=uint8_t(table[k]);
+        const uint32_t* const l=reinterpret_cast<const uint32_t*>(bytes+256);
+        uint32_t* const lo=reinterpret_cast<uint32_t*>(bytes+256);
+        for(unsigned k=4;k<64;k+=4){lo[k]=l[0];lo[k+1]=l[1];lo[k+2]=l[2];lo[k+3]=l[3];}
+    }
     s.hz=short(p.hzoom);
     s.q=4096/p.hzoom;
     s.r=short(4096-s.q*p.hzoom);
