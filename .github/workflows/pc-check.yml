@@ -57,5 +57,5 @@ jobs:
           echo "head: $(grep -c DIGEST head/digest.txt) digests, $(tail -1 head/digest.txt)"
           bad=0
           if ! cmp -s head/digest.txt base/digest.txt; then echo "DIFFERENT from base:"; diff base/digest.txt head/digest.txt | head -20; bad=1; fi
-          if grep -iE 'fail|mismatch' head/run.txt head/run.err | head -10; then bad=1; fi
+          if grep -qiE 'fail|mismatch' head/run.txt head/run.err; then grep -iE 'fail|mismatch' head/run.txt head/run.err | head -10; bad=1; fi
           exit $bad
