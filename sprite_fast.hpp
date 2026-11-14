@@ -124,7 +124,9 @@ SPRITE_INLINE bool sprite_word_end(uint32_t w){
 template<typename P,bool Flip,int DX,bool Shadow,bool Minify>
 SPRITE_INLINE bool sprite_edge_word(const uint32_t*& src,P*& dst,short& acc,short hz,short r,int q,const uint16_t* table,P* row,const SpriteRowSetup& s){
     const uint32_t w=Flip?*--src:*src++;
-    if(!sprite_word_clear(w))sprite_word_clipped<P,Flip,DX,Shadow,Minify>(w,dst,acc,hz,table,row+s.left,s.span);
+    // (a word whose every output, q or q+1 pixels, lies before the clip window draws nothing)
+    if(!sprite_word_clear(w)&&(DX>0?dst+q+1>row+s.left:dst-q-1<row+s.left+int(s.span)))
+        sprite_word_clipped<P,Flip,DX,Shadow,Minify>(w,dst,acc,hz,table,row+s.left,s.span);
     acc-=r;dst+=DX*q;if(acc<0){acc+=hz;dst+=DX;}
     return sprite_word_end<Flip>(w);
 }
