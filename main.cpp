@@ -338,7 +338,9 @@ int main(int argc,char**argv) {
 #ifdef OR_X68K
             RoadFrame& road_frame=platform_road_back();
 #else
-            static RoadFrame road_frame;
+            // (three frames in turn, as on the X68000: the frame built before is never the one being built)
+            static RoadFrame road_frames_pc[3];static unsigned road_frame_next=0;
+            RoadFrame& road_frame=road_frames_pc[road_frame_next];road_frame_next=(road_frame_next+1)%3;
 #endif
 #ifdef OR_X68K
             // r029: build first (into the free third frame), then wait until the frame before has
