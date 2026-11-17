@@ -57,6 +57,9 @@ How to use
    (the set Cannonball uses: epr-10380b.133, mpr-10371.9, opr-10185.11 ...).
    As in Cannonball, the files are found by their CRC32, so their names do not matter
    (8.3 names such as 10380B.133 are fine).
+   The Revision A set also works: its master CPU and sprite ROMs (the other ROMs are the same
+   as in Revision B) are found by their CRC32 in the same way. The game then plays with the
+   Revision A data (for example the stage 1 hills and the default best scores differ).
 3. Start:  CBX68 0 30 manual both
    (a 5th argument gives another ROM folder, e.g.  CBX68 0 30 manual both A:\OUTRUN\)
 If a file is missing or wrong, the program lists it (as Cannonball does) and stops.
@@ -126,6 +129,9 @@ ROMは含まれていません。
 1. CBX68.X、TILEMAP.BIN、TILEPAT.BIN を同じフォルダーに置く
 2. そのフォルダーに ROMS フォルダーを作り、ROMファイル（Cannonballと同じセット）を入れる
    （Cannonballと同じく中身のCRC32で探すので、ファイル名は自由です。例: 10380B.133）
+   Revision A のセットでも動きます。メインCPUとスプライトのROMが Revision A なら
+   （ほかのROMは Revision B と同じ）、それを使って Revision A のデータで遊べます
+   （例: ステージ1の起伏や、最初のハイスコアが違います）。
 3. CBX68 0 30 manual both で起動
    （5番目の引数でROMフォルダーを指定できます）
 ファイルが無い・違う場合は、Cannonballと同様に一覧を表示して終了します。

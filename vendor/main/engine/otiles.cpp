@@ -62,7 +62,7 @@ void OTiles::write_tilemap_hw()
 
 void OTiles::setup_palette_hud()
 {
-    uint32_t src_addr = 0x16ED8;
+    uint32_t src_addr = PAL_HUD; // (0x16ED8)
     uint32_t pal_addr = 0x120000;
 
     // Write longs of palette data. Read from ASSET.
@@ -80,13 +80,13 @@ void OTiles::setup_palette_hud()
 
 void OTiles::setup_palette_tilemap()
 {
-    uint32_t src_addr = 0x16FD8;
+    uint32_t src_addr = PAL_TILEMAP_INDEX; // (0x16FD8)
     uint32_t pal_addr = S16_PALETTE_BASE + (8 * 16); // Palette Entry 8
     
     for (int i = 0; i < 120; i++)
     {    
         uint16_t offset = assets.asset0.read8(&src_addr) << 4;
-        uint32_t tile_data_addr = 0x17050 + offset;
+        uint32_t tile_data_addr = PAL_TILEMAP_DATA + offset; // (0x17050)
         
         // Write 4 x longs of palette data. Read from ASSET.
         video.write_pal32(&pal_addr, assets.asset0.read32(&tile_data_addr));

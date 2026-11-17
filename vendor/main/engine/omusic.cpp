@@ -74,7 +74,8 @@ void OMusic::enable()
     ostats.frame_counter      = ostats.frame_reset;  
      
     blit_music_select();
-    ohud.blit_text2(TEXT2_SELECT_MUSIC); // Select Music By Steering
+    if (TEXT2_SELECT_MUSIC) // Cannonball for x68: 0 with Revision A, where this text is not found
+        ohud.blit_text2(TEXT2_SELECT_MUSIC); // Select Music By Steering
   
     osoundint.queue_sound(sound::RESET);
     if (!config.sound.preview)

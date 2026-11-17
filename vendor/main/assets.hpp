@@ -29,10 +29,15 @@ public:
     AssetLoader* asset0p;
     AssetLoader* asset1p;
 
+    // Cannonball for x68: the master CPU and sprite ROMs loaded are Revision A
+    bool rev_a;
+
     Assets();
     ~Assets();
     bool load_revb_assets(bool);
     bool load_japanese_assets();
+    int load_master(bool a, bool verbose);
+    int load_sprites(bool a);
     int load_pcm_asset(bool);
     bool load_ym_data(const char* filename);
 

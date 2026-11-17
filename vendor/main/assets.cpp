@@ -34,10 +34,17 @@ bool Assets::load_revb_assets(bool fixed_asset)
 
     // Load Master CPU ASSETs
     asset0.init(0x40000);
-    status += LOAD(asset0, ("epr-10380b.133", 0x00000, 0x10000, 0x1f6cadad, AssetLoader::INTERLEAVE2, VERBOSE));
-    status += LOAD(asset0, ("epr-10382b.118", 0x00001, 0x10000, 0xc4c3fa1a, AssetLoader::INTERLEAVE2, VERBOSE));
-    status += LOAD(asset0, ("epr-10381b.132", 0x20000, 0x10000, 0xbe8c412b, AssetLoader::INTERLEAVE2, VERBOSE));
-    status += LOAD(asset0, ("epr-10383b.117", 0x20001, 0x10000, 0x10a2014a, AssetLoader::INTERLEAVE2, VERBOSE));
+    // Cannonball for x68: the Revision A master CPU ROMs are also accepted (same data at other
+    // addresses: oaddresses_rev_a() sets them). Try Revision B first, then A, quietly; if neither
+    // set is complete, try B again with the messages.
+    rev_a = false;
+    if (load_master(false, false) != 0)
+    {
+        if (load_master(true, false) == 0)
+            rev_a = true;
+        else
+            status += load_master(false, VERBOSE);
+    }
 
     // Load Slave CPU ASSETs
     asset1.init(0x40000);
@@ -62,14 +69,7 @@ bool Assets::load_revb_assets(bool fixed_asset)
 
     // Load Interleaved Sprite ASSETs
     sprites.init(0x100000);
-    status += LOAD(sprites, ("mpr-10371.9", 0x000000, 0x20000, 0x7cc86208, AssetLoader::INTERLEAVE4, VERBOSE));
-    status += LOAD(sprites, ("mpr-10373.10", 0x000001, 0x20000, 0xb0d26ac9, AssetLoader::INTERLEAVE4, VERBOSE));
-    status += LOAD(sprites, ("mpr-10375.11", 0x000002, 0x20000, 0x59b60bd7, AssetLoader::INTERLEAVE4, VERBOSE));
-    status += LOAD(sprites, ("mpr-10377.12", 0x000003, 0x20000, 0x17a1b04a, AssetLoader::INTERLEAVE4, VERBOSE));
-    status += LOAD(sprites, ("mpr-10372.13", 0x080000, 0x20000, 0xb557078c, AssetLoader::INTERLEAVE4, VERBOSE));
-    status += LOAD(sprites, ("mpr-10374.14", 0x080001, 0x20000, 0x8051e517, AssetLoader::INTERLEAVE4, VERBOSE));
-    status += LOAD(sprites, ("mpr-10376.15", 0x080002, 0x20000, 0xf3b8f318, AssetLoader::INTERLEAVE4, VERBOSE));
-    status += LOAD(sprites, ("mpr-10378.16", 0x080003, 0x20000, 0xa1062984, AssetLoader::INTERLEAVE4, VERBOSE));
+    status += load_sprites(rev_a);
 
     // Load Z80 Sound ASSET
     // Note: This is a deliberate decision to double the Z80 ASSET Space to accomodate extra FM based music
@@ -115,6 +115,27 @@ bool Assets::load_japanese_assets()
     jap_asset_status += LOAD(j_asset1, ("epr-10330.57", 0x20001, 0x10000, 0x59786e99, AssetLoader::INTERLEAVE2, VERBOSE));
     // If status has been incremented, a asset has failed to load.
     return jap_asset_status == 0;
+}
+
+int Assets::load_master(bool a, bool verbose)
+{
+    int status = 0;
+    status += LOAD(asset0, (a ? "epr-10380a.133" : "epr-10380b.133", 0x00000, 0x10000, a ? 0x58b84d83 : 0x1f6cadad, AssetLoader::INTERLEAVE2, verbose));
+    status += LOAD(asset0, (a ? "epr-10382a.118" : "epr-10382b.118", 0x00001, 0x10000, a ? 0x39387c63 : 0xc4c3fa1a, AssetLoader::INTERLEAVE2, verbose));
+    status += LOAD(asset0, (a ? "epr-10381a.132" : "epr-10381b.132", 0x20000, 0x10000, 0xbe8c412b, AssetLoader::INTERLEAVE2, verbose));
+    status += LOAD(asset0, (a ? "epr-10383a.117" : "epr-10383b.117", 0x20001, 0x10000, a ? 0xdcc586e7 : 0x10a2014a, AssetLoader::INTERLEAVE2, verbose));
+    return status;
+}
+
+int Assets::load_sprites(bool a)
+{
+    static const uint32_t CRC_B[8] = { 0x7cc86208, 0xb0d26ac9, 0x59b60bd7, 0x17a1b04a, 0xb557078c, 0x8051e517, 0xf3b8f318, 0xa1062984 };
+    static const uint32_t CRC_A[8] = { 0x8ad7c647, 0xce7d3841, 0xccf042a0, 0xc14f1d68, 0x6f49eae7, 0xe19e7d1f, 0xf83116ab, 0xe531855a };
+    static const char* const NAME[8] = { "mpr-10371.9", "mpr-10373.10", "mpr-10375.11", "mpr-10377.12", "mpr-10372.13", "mpr-10374.14", "mpr-10376.15", "mpr-10378.16" };
+    int status = 0;
+    for (int i = 0; i < 8; i++)
+        status += LOAD(sprites, (NAME[i], (i >> 2) * 0x80000 + (i & 3), 0x20000, (int)(a ? CRC_A[i] : CRC_B[i]), AssetLoader::INTERLEAVE4, VERBOSE));
+    return status;
 }
 
 int Assets::load_pcm_asset(bool fixed_asset)
